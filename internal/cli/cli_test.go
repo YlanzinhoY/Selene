@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -56,8 +58,9 @@ func TestPlanJSON(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("Run(plan --json) code = %d; stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), `"ready": false`) {
-		t.Fatalf("plan should report current blockers: %q", stdout.String())
+	wantReady := runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+	if !strings.Contains(stdout.String(), fmt.Sprintf(`"ready": %t`, wantReady)) {
+		t.Fatalf("plan readiness does not match %s/%s: %q", runtime.GOOS, runtime.GOARCH, stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `"phase": "download"`) {
 		t.Fatalf("plan does not contain download operations: %q", stdout.String())
