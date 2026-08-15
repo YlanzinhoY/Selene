@@ -42,9 +42,9 @@ func TestLatestRestorableRecoversInterruptedRemoval(t *testing.T) {
 }
 
 func TestInstallConfirmationExplainsSafetyBoundary(t *testing.T) {
-	m := model{plan: &planner.Plan{Ready: true, BundleName: "LuaTools para Linux"}}
+	m := model{plan: &planner.Plan{Ready: true, BundleName: "LuaTools for Linux"}}
 	content := m.installConfirmContent()
-	for _, expected := range []string{"SHA-256", "Sudo", "snapshot", "rollback automático", "Pressione i"} {
+	for _, expected := range []string{"SHA-256", "Sudo", "snapshot", "automatic rollback", "Press i"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("confirmation does not mention %q: %q", expected, content)
 		}
@@ -54,7 +54,7 @@ func TestInstallConfirmationExplainsSafetyBoundary(t *testing.T) {
 func TestHomeUsesSemanticInstallationDetailsLabel(t *testing.T) {
 	m := newModel()
 	defer m.cancel()
-	if got := m.items[1].title; got != "Detalhes da instalação" {
+	if got := m.items[1].title; got != "Installation details" {
 		t.Fatalf("installation details item = %q", got)
 	}
 }
@@ -65,9 +65,21 @@ func TestUninstallConfirmationExplainsCompleteScope(t *testing.T) {
 		Traces:   []string{"/home/player/.local/share/Lumen"},
 	}}
 	content := m.uninstallConfirmContent()
-	for _, expected := range []string{"LuaTools", "Lumen", "slsteam-moon", "jogos", "snapshot", "Pressione x"} {
+	for _, expected := range []string{"LuaTools", "Lumen", "slsteam-moon", "games", "snapshot", "Press x"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("uninstall confirmation does not mention %q: %q", expected, content)
 		}
+	}
+}
+
+func TestHomeMenuHasBreathingRoomBetweenItems(t *testing.T) {
+	m := newModel()
+	defer m.cancel()
+	content := m.homeView()
+	if !strings.Contains(content, "\n\n") {
+		t.Fatalf("home menu has no blank line between items: %q", content)
+	}
+	if !strings.Contains(content, "Check Linux, Steam, libraries, and Proton") {
+		t.Fatalf("home menu does not show the selected description: %q", content)
 	}
 }

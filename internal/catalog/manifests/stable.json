@@ -5,8 +5,8 @@
   "bundles": [
     {
       "id": "luatools",
-      "name": "LuaTools para Linux",
-      "description": "Stack principal com slsteam-moon, Lumen e o plugin LuaTools.",
+      "name": "LuaTools for Linux",
+      "description": "Main stack with slsteam-moon, Lumen, and the LuaTools plugin.",
       "components": [
         "slsteam-moon",
         "lumen",
@@ -19,7 +19,7 @@
       "id": "slsteam-moon",
       "name": "slsteam-moon",
       "version": "v2.8",
-      "description": "Integração da Steam usada para iniciar o Lumen e o LuaTools.",
+      "description": "Steam integration used to launch Lumen and LuaTools.",
       "dependencies": [],
       "source": {
         "provider": "github-release",
@@ -57,7 +57,7 @@
       "id": "lumen",
       "name": "Lumen",
       "version": "v2.8",
-      "description": "Sidecar que hospeda o backend e injeta o frontend do LuaTools.",
+      "description": "Sidecar that hosts the backend and injects the LuaTools frontend.",
       "dependencies": [
         "slsteam-moon"
       ],
@@ -92,7 +92,7 @@
       "id": "luatools-moon",
       "name": "LuaTools Moon",
       "version": "v2.8",
-      "description": "Frontend e backend Lua do LuaTools para o Lumen.",
+      "description": "LuaTools frontend and Lua backend for Lumen.",
       "dependencies": [
         "lumen"
       ],
@@ -129,7 +129,7 @@
       "id": "cloudredirect-moon",
       "name": "CloudRedirect Moon",
       "version": "f07a3f59fec0",
-      "description": "Integração opcional de saves em nuvem usada pelo ecossistema Moon.",
+      "description": "Optional cloud-save integration for the Moon ecosystem.",
       "optional": true,
       "dependencies": [
         "slsteam-moon",

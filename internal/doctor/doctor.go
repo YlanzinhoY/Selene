@@ -25,7 +25,7 @@ const (
 	StatusInfo    Status = "info"
 )
 
-// Check is one result shown by `selene doctor` and the TUI.
+// Check is one result shown by the TUI.
 type Check struct {
 	ID      string   `json:"id"`
 	Title   string   `json:"title"`
@@ -72,8 +72,8 @@ func Run(ctx context.Context) Report {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		report.Checks = append(report.Checks, Check{
-			ID: "home", Title: "Diretório pessoal", Status: StatusError,
-			Summary: "Não foi possível localizar o diretório pessoal.",
+			ID: "home", Title: "Home directory", Status: StatusError,
+			Summary: "The home directory could not be located.",
 			Details: []string{err.Error()},
 		})
 		return finish(report)
@@ -96,8 +96,8 @@ func Run(ctx context.Context) Report {
 func checkPlatform() Check {
 	if runtime.GOOS != "linux" {
 		return Check{
-			ID: "platform", Title: "Plataforma", Status: StatusWarning,
-			Summary: fmt.Sprintf("%s/%s detectado; o alvo do Selene é Linux.", runtime.GOOS, runtime.GOARCH),
+			ID: "platform", Title: "Platform", Status: StatusWarning,
+			Summary: fmt.Sprintf("Detected %s/%s; Selene targets Linux.", runtime.GOOS, runtime.GOARCH),
 		}
 	}
 
@@ -110,14 +110,14 @@ func checkPlatform() Check {
 	}
 
 	status := StatusOK
-	details := []string{"Arquitetura: " + runtime.GOARCH}
+	details := []string{"Architecture: " + runtime.GOARCH}
 	if runtime.GOARCH != "amd64" {
 		status = StatusWarning
-		details = append(details, "O suporte inicial será validado primeiro em amd64.")
+		details = append(details, "Initial support is validated on amd64 first.")
 	}
 
 	return Check{
-		ID: "platform", Title: "Plataforma", Status: status,
+		ID: "platform", Title: "Platform", Status: status,
 		Summary: name,
 		Details: details,
 	}
@@ -131,10 +131,10 @@ func checkSteam(installs []steamInstall) Check {
 		}
 		return Check{
 			ID: "steam", Title: "Steam", Status: status,
-			Summary: "Nenhuma instalação Linux da Steam foi localizada.",
+			Summary: "No Linux Steam installation was found.",
 			Details: []string{
-				"São reconhecidas instalações nativas e Flatpak.",
-				"Nenhum arquivo foi alterado.",
+				"Native and Flatpak installations are recognized.",
+				"No files were changed.",
 			},
 		}
 	}
@@ -145,7 +145,7 @@ func checkSteam(installs []steamInstall) Check {
 	}
 	return Check{
 		ID: "steam", Title: "Steam", Status: StatusOK,
-		Summary: fmt.Sprintf("%d instalação(ões) localizada(s).", len(installs)),
+		Summary: fmt.Sprintf("Found %d installation(s).", len(installs)),
 		Details: details,
 	}
 }
@@ -153,14 +153,14 @@ func checkSteam(installs []steamInstall) Check {
 func checkLibraries(libraries []string) Check {
 	if len(libraries) == 0 {
 		return Check{
-			ID: "libraries", Title: "Bibliotecas da Steam", Status: StatusWarning,
-			Summary: "Nenhuma biblioteca com o diretório steamapps foi localizada.",
+			ID: "libraries", Title: "Steam libraries", Status: StatusWarning,
+			Summary: "No library containing a steamapps directory was found.",
 		}
 	}
 
 	return Check{
-		ID: "libraries", Title: "Bibliotecas da Steam", Status: StatusOK,
-		Summary: fmt.Sprintf("%d biblioteca(s) localizada(s).", len(libraries)),
+		ID: "libraries", Title: "Steam libraries", Status: StatusOK,
+		Summary: fmt.Sprintf("Found %d library or libraries.", len(libraries)),
 		Details: libraries,
 	}
 }
@@ -170,14 +170,14 @@ func checkProton(installs []steamInstall, libraries []string) Check {
 	if len(tools) == 0 {
 		return Check{
 			ID: "proton", Title: "Proton", Status: StatusWarning,
-			Summary: "Nenhuma instalação do Proton foi localizada.",
-			Details: []string{"Abra as propriedades de um jogo na Steam para selecionar uma ferramenta de compatibilidade."},
+			Summary: "No Proton installation was found.",
+			Details: []string{"Open a game's Steam properties to select a compatibility tool."},
 		}
 	}
 
 	return Check{
 		ID: "proton", Title: "Proton", Status: StatusOK,
-		Summary: fmt.Sprintf("%d ferramenta(s) de compatibilidade localizada(s).", len(tools)),
+		Summary: fmt.Sprintf("Found %d compatibility tool(s).", len(tools)),
 		Details: tools,
 	}
 }
@@ -185,8 +185,8 @@ func checkProton(installs []steamInstall, libraries []string) Check {
 func checkDesktopSession() Check {
 	if runtime.GOOS != "linux" {
 		return Check{
-			ID: "session", Title: "Sessão gráfica", Status: StatusInfo,
-			Summary: "A sessão gráfica será detectada quando o Selene for executado no Linux.",
+			ID: "session", Title: "Desktop session", Status: StatusInfo,
+			Summary: "The desktop session will be detected when Selene runs on Linux.",
 		}
 	}
 
@@ -194,8 +194,8 @@ func checkDesktopSession() Check {
 	desktop := strings.TrimSpace(os.Getenv("XDG_CURRENT_DESKTOP"))
 	if session == "" && desktop == "" {
 		return Check{
-			ID: "session", Title: "Sessão gráfica", Status: StatusWarning,
-			Summary: "As variáveis XDG da sessão não estão disponíveis.",
+			ID: "session", Title: "Desktop session", Status: StatusWarning,
+			Summary: "The session's XDG variables are not available.",
 		}
 	}
 
@@ -207,17 +207,17 @@ func checkDesktopSession() Check {
 		parts = append(parts, session)
 	}
 	return Check{
-		ID: "session", Title: "Sessão gráfica", Status: StatusInfo,
+		ID: "session", Title: "Desktop session", Status: StatusInfo,
 		Summary: strings.Join(parts, " · "),
 	}
 }
 
 func findSteamInstalls(home string) []steamInstall {
 	candidates := []steamInstall{
-		{Kind: "nativa", Root: filepath.Join(home, ".local", "share", "Steam")},
-		{Kind: "nativa", Root: filepath.Join(home, ".steam", "steam")},
-		{Kind: "nativa", Root: filepath.Join(home, ".steam", "root")},
-		{Kind: "nativa", Root: filepath.Join(home, ".steam", "debian-installation")},
+		{Kind: "native", Root: filepath.Join(home, ".local", "share", "Steam")},
+		{Kind: "native", Root: filepath.Join(home, ".steam", "steam")},
+		{Kind: "native", Root: filepath.Join(home, ".steam", "root")},
+		{Kind: "native", Root: filepath.Join(home, ".steam", "debian-installation")},
 		{Kind: "Flatpak", Root: filepath.Join(home, ".var", "app", "com.valvesoftware.Steam", "data", "Steam")},
 	}
 

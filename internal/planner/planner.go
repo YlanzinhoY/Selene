@@ -94,10 +94,10 @@ func Build(source catalog.Catalog, bundleID string, env Environment) (Plan, erro
 		Ready:           true,
 	}
 	if env.OS != "linux" {
-		plan.Blockers = append(plan.Blockers, fmt.Sprintf("plataforma %s não suportada; o instalador tem como alvo Linux", env.OS))
+		plan.Blockers = append(plan.Blockers, fmt.Sprintf("unsupported platform %s; the installer targets Linux", env.OS))
 	}
 	if env.Arch != "amd64" {
-		plan.Blockers = append(plan.Blockers, fmt.Sprintf("arquitetura %s não suportada; os artefatos atuais exigem amd64/x86_64", env.Arch))
+		plan.Blockers = append(plan.Blockers, fmt.Sprintf("unsupported architecture %s; current artifacts require amd64/x86_64", env.Arch))
 	}
 
 	add := func(operation Operation) {
@@ -105,10 +105,10 @@ func Build(source catalog.Catalog, bundleID string, env Environment) (Plan, erro
 		plan.Operations = append(plan.Operations, operation)
 	}
 	add(Operation{
-		Phase: "preflight", Action: "Confirmar que Steam e Lumen podem ser encerrados antes da instalação", Risk: "medium",
+		Phase: "preflight", Action: "Confirm that Steam and Lumen can be stopped before installation", Risk: "medium",
 	})
 	add(Operation{
-		Phase: "snapshot", Action: "Salvar arquivos afetados e abrir um journal persistente para rollback",
+		Phase: "snapshot", Action: "Save affected files and open a persistent rollback journal",
 		Target: filepath.Join(env.XDGStateHome, "selene", "transactions"), Risk: "medium",
 	})
 
@@ -121,28 +121,28 @@ func Build(source catalog.Catalog, bundleID string, env Environment) (Plan, erro
 
 		add(Operation{
 			Phase: "download", Component: component.ID,
-			Action: fmt.Sprintf("Baixar %s %s por HTTPS", component.Name, component.Version),
+			Action: fmt.Sprintf("Download %s %s over HTTPS", component.Name, component.Version),
 			Target: cacheTarget, Risk: "low",
 		})
 		add(Operation{
 			Phase: "verify", Component: component.ID,
-			Action: fmt.Sprintf("Verificar tamanho %d e SHA-256 %s", component.Artifact.Size, shortHash(component.Artifact.SHA256)),
+			Action: fmt.Sprintf("Verify size %d and SHA-256 %s", component.Artifact.Size, shortHash(component.Artifact.SHA256)),
 			Target: cacheTarget, Risk: "low",
 		})
 		add(Operation{
 			Phase: "stage", Component: component.ID,
-			Action: fmt.Sprintf("Validar caminhos e conteúdo obrigatório do artefato %s", component.Artifact.Format),
+			Action: fmt.Sprintf("Validate paths and required content in the %s artifact", component.Artifact.Format),
 			Target: destination, Risk: "low",
 		})
 		add(Operation{
 			Phase: "backup", Component: component.ID,
-			Action: "Criar snapshot da instalação existente antes de substituí-la",
+			Action: "Snapshot the existing installation before replacing it",
 			Target: destination, Risk: "medium",
 		})
 		if len(component.Install.Preserve) > 0 {
 			add(Operation{
 				Phase: "preserve", Component: component.ID,
-				Action: "Preservar dados do usuário: " + strings.Join(component.Install.Preserve, ", "),
+				Action: "Preserve user data: " + strings.Join(component.Install.Preserve, ", "),
 				Target: destination, Risk: "medium",
 			})
 		}
@@ -150,20 +150,20 @@ func Build(source catalog.Catalog, bundleID string, env Environment) (Plan, erro
 		if component.Install.Strategy == "verified-script" {
 			add(Operation{
 				Phase: "configure", Component: component.ID,
-				Action: "Executar o setup.sh fixado e verificado com sudo bloqueado e escopo somente do usuário",
+				Action: "Run the pinned, verified setup.sh with sudo blocked and user-only scope",
 				Target: destination, Risk: "high",
 			})
 		} else {
 			add(Operation{
 				Phase: "activate", Component: component.ID,
-				Action: "Ativar a árvore preparada por troca atômica e registrar rollback",
+				Action: "Activate the prepared tree with an atomic swap and record rollback data",
 				Target: destination, Risk: "medium",
 			})
 		}
 	}
 
 	add(Operation{
-		Phase: "verify", Action: "Validar os arquivos instalados; em qualquer falha, parar serviços e restaurar o snapshot", Risk: "medium",
+		Phase: "verify", Action: "Validate installed files; on failure, stop services, restore the snapshot, and restart Steam", Risk: "medium",
 	})
 	plan.Ready = len(plan.Blockers) == 0
 	return plan, nil
