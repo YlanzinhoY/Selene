@@ -1,12 +1,39 @@
 package planner
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/selene-linux/selene/internal/catalog"
 )
+
+func TestDetectEnvironmentIgnoresRelativeXDGPaths(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "relative-data")
+	t.Setenv("XDG_CACHE_HOME", "relative-cache")
+	t.Setenv("XDG_CONFIG_HOME", "relative-config")
+	t.Setenv("XDG_STATE_HOME", "relative-state")
+	env, err := DetectEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{
+		"data": env.XDGDataHome, "cache": env.XDGCacheHome,
+		"config": env.XDGConfigHome, "state": env.XDGStateHome,
+	} {
+		if !filepath.IsAbs(value) {
+			t.Fatalf("%s path remained relative: %q", name, value)
+		}
+	}
+	wantHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.XDGDataHome != filepath.Join(wantHome, ".local", "share") {
+		t.Fatalf("XDGDataHome = %q", env.XDGDataHome)
+	}
+}
 
 func TestBuildLuaToolsPlan(t *testing.T) {
 	source, err := catalog.LoadStable()

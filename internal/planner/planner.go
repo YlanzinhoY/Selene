@@ -49,19 +49,19 @@ func DetectEnvironment() (Environment, error) {
 		return Environment{}, fmt.Errorf("locate home directory: %w", err)
 	}
 	dataHome := os.Getenv("XDG_DATA_HOME")
-	if dataHome == "" {
+	if dataHome == "" || !filepath.IsAbs(dataHome) {
 		dataHome = filepath.Join(home, ".local", "share")
 	}
 	cacheHome := os.Getenv("XDG_CACHE_HOME")
-	if cacheHome == "" {
+	if cacheHome == "" || !filepath.IsAbs(cacheHome) {
 		cacheHome = filepath.Join(home, ".cache")
 	}
 	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if configHome == "" {
+	if configHome == "" || !filepath.IsAbs(configHome) {
 		configHome = filepath.Join(home, ".config")
 	}
 	stateHome := os.Getenv("XDG_STATE_HOME")
-	if stateHome == "" {
+	if stateHome == "" || !filepath.IsAbs(stateHome) {
 		stateHome = filepath.Join(home, ".local", "state")
 	}
 	return Environment{

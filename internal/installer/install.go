@@ -45,6 +45,8 @@ type ScriptRunner interface {
 
 type processRunner struct{}
 
+const trustedPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 func (processRunner) Run(ctx context.Context, command ScriptCommand) error {
 	arguments := append([]string{command.Script}, command.Arguments...)
 	cmd := exec.CommandContext(ctx, "/bin/bash", arguments...)
@@ -186,11 +188,14 @@ func preflight(env planner.Environment) error {
 	if effectiveUID() == 0 {
 		return errors.New("do not run Selene as root")
 	}
+	if err := validateEnvironment(env); err != nil {
+		return err
+	}
 	if _, err := os.Stat("/bin/bash"); err != nil {
 		return errors.New("/bin/bash is required for the verified upstream setup")
 	}
 	for _, command := range []string{"awk", "sed", "grep", "find", "install", "cp", "mv", "pkill"} {
-		if _, err := exec.LookPath(command); err != nil {
+		if _, ok := trustedCommand(command); !ok {
 			return fmt.Errorf("required command %s was not found", command)
 		}
 	}
@@ -198,6 +203,24 @@ func preflight(env planner.Environment) error {
 		return errors.New("a bootstrapped native Steam installation is required; open native Steam once before installing (Flatpak-only Steam is not supported yet)")
 	}
 	return validateUserScope(env)
+}
+
+func validateEnvironment(env planner.Environment) error {
+	for name, value := range map[string]string{
+		"HOME": env.Home, "XDG_DATA_HOME": env.XDGDataHome,
+		"XDG_CACHE_HOME": env.XDGCacheHome, "XDG_CONFIG_HOME": env.XDGConfigHome,
+		"XDG_STATE_HOME": env.XDGStateHome,
+	} {
+		if value == "" || !filepath.IsAbs(value) {
+			return fmt.Errorf("%s must be an absolute path", name)
+		}
+		cleaned := filepath.Clean(value)
+		root := filepath.VolumeName(cleaned) + string(filepath.Separator)
+		if cleaned == root || cleaned == string(filepath.Separator) {
+			return fmt.Errorf("%s must not be a filesystem root", name)
+		}
+	}
+	return nil
 }
 
 func nativeSteamBootstrapped(home string) bool {
@@ -218,34 +241,20 @@ func nativeSteamBootstrapped(home string) bool {
 }
 
 func controlledEnvironment(env planner.Environment) []string {
-	drop := map[string]bool{
-		"HOME": true, "XDG_DATA_HOME": true, "XDG_CACHE_HOME": true,
-		"XDG_CONFIG_HOME": true, "XDG_STATE_HOME": true,
-		"SLSM_IMMUTABLE": true, "SLSM_SUDO_DENIED": true, "SLSM_SUDO_PRIMED": true,
-		"SUDO_ASKPASS": true, "LD_AUDIT": true, "LD_PRELOAD": true, "LD_LIBRARY_PATH": true,
+	allow := map[string]bool{
+		"LANG": true, "LANGUAGE": true, "LC_ALL": true, "LC_MESSAGES": true,
+		"TERM": true, "COLORTERM": true, "NO_COLOR": true,
+		"DISPLAY": true, "WAYLAND_DISPLAY": true,
+		"XDG_RUNTIME_DIR": true, "DBUS_SESSION_BUS_ADDRESS": true,
+		"USER": true, "LOGNAME": true, "SHELL": true,
 	}
 	var values []string
-	pathValue := ""
 	for _, value := range os.Environ() {
 		key, _, ok := strings.Cut(value, "=")
-		if !ok || drop[key] {
-			continue
-		}
-		if key == "PATH" {
-			pathValue = strings.TrimPrefix(value, "PATH=")
+		if !ok || (!allow[key] && !strings.HasPrefix(key, "LC_")) {
 			continue
 		}
 		values = append(values, value)
-	}
-	if pathValue == "" {
-		pathValue = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-	}
-	wrapperDir := filepath.Join(stackDataHome(env), "SLSsteam", "path")
-	var pathParts []string
-	for _, part := range filepath.SplitList(pathValue) {
-		if filepath.Clean(part) != filepath.Clean(wrapperDir) {
-			pathParts = append(pathParts, part)
-		}
 	}
 	values = append(values,
 		"HOME="+env.Home,
@@ -253,7 +262,7 @@ func controlledEnvironment(env planner.Environment) []string {
 		"XDG_CACHE_HOME="+env.XDGCacheHome,
 		"XDG_CONFIG_HOME="+env.XDGConfigHome,
 		"XDG_STATE_HOME="+env.XDGStateHome,
-		"PATH="+strings.Join(pathParts, string(os.PathListSeparator)),
+		"PATH="+trustedPath,
 		"SLSM_IMMUTABLE=1",
 		"SLSM_SUDO_DENIED=1",
 		"SLSM_SUDO_PRIMED=0",
@@ -280,26 +289,28 @@ func abortTransaction(tx *transaction.Transaction, installCommand *ScriptCommand
 }
 
 func stopGuardian(ctx context.Context, env planner.Environment) {
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	systemctl, ok := trustedCommand("systemctl")
+	if !ok {
 		return
 	}
-	cmd := exec.CommandContext(ctx, "systemctl", "--user", "disable", "--now",
+	cmd := exec.CommandContext(ctx, systemctl, "--user", "disable", "--now",
 		"slsteam-desktop-guardian.path", "slsteam-desktop-guardian.timer")
 	cmd.Env = controlledEnvironment(env)
 	_ = cmd.Run()
-	cmd = exec.CommandContext(ctx, "systemctl", "--user", "stop", "slsteam-desktop-guardian.service")
+	cmd = exec.CommandContext(ctx, systemctl, "--user", "stop", "slsteam-desktop-guardian.service")
 	cmd.Env = controlledEnvironment(env)
 	_ = cmd.Run()
-	cmd = exec.CommandContext(ctx, "systemctl", "--user", "daemon-reload")
+	cmd = exec.CommandContext(ctx, systemctl, "--user", "daemon-reload")
 	cmd.Env = controlledEnvironment(env)
 	_ = cmd.Run()
 }
 
 func restoreGuardian(ctx context.Context, env planner.Environment) {
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	systemctl, ok := trustedCommand("systemctl")
+	if !ok {
 		return
 	}
-	cmd := exec.CommandContext(ctx, "systemctl", "--user", "daemon-reload")
+	cmd := exec.CommandContext(ctx, systemctl, "--user", "daemon-reload")
 	cmd.Env = controlledEnvironment(env)
 	_ = cmd.Run()
 	unitDir := filepath.Join(env.XDGConfigHome, "systemd", "user")
@@ -311,11 +322,25 @@ func restoreGuardian(ctx context.Context, env planner.Environment) {
 		{filepath.Join(unitDir, "timers.target.wants", "slsteam-desktop-guardian.timer"), "slsteam-desktop-guardian.timer"},
 	} {
 		if _, err := os.Lstat(unit.link); err == nil {
-			cmd := exec.CommandContext(ctx, "systemctl", "--user", "start", unit.name)
+			cmd := exec.CommandContext(ctx, systemctl, "--user", "start", unit.name)
 			cmd.Env = controlledEnvironment(env)
 			_ = cmd.Run()
 		}
 	}
+}
+
+func trustedCommand(name string) (string, bool) {
+	if name == "" || filepath.Base(name) != name {
+		return "", false
+	}
+	for _, directory := range strings.Split(trustedPath, ":") {
+		candidate := filepath.Join(directory, name)
+		info, err := os.Stat(candidate)
+		if err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 func validateInstalled(env planner.Environment) error {

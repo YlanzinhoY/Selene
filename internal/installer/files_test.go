@@ -56,6 +56,8 @@ func TestControlledEnvironmentForcesUserOnlyMode(t *testing.T) {
 	t.Setenv("PATH", strings.Join([]string{wrapper, filepath.Join(root, "bin")}, string(os.PathListSeparator)))
 	t.Setenv("LD_AUDIT", "unsafe.so")
 	t.Setenv("SLSM_IMMUTABLE", "0")
+	t.Setenv("BASH_ENV", filepath.Join(root, "inject.sh"))
+	t.Setenv("DGU_UNIT_DIR", filepath.Join(root, "outside-snapshot"))
 	values := controlledEnvironment(env)
 	got := make(map[string]string)
 	for _, value := range values {
@@ -70,10 +72,14 @@ func TestControlledEnvironmentForcesUserOnlyMode(t *testing.T) {
 	if _, exists := got["LD_AUDIT"]; exists {
 		t.Fatal("LD_AUDIT leaked into the verified installer")
 	}
-	for _, part := range filepath.SplitList(got["PATH"]) {
-		if filepath.Clean(part) == filepath.Clean(wrapper) {
-			t.Fatal("previous SLSsteam wrapper leaked into PATH")
-		}
+	if _, exists := got["BASH_ENV"]; exists {
+		t.Fatal("BASH_ENV leaked into the verified installer")
+	}
+	if _, exists := got["DGU_UNIT_DIR"]; exists {
+		t.Fatal("upstream path override leaked into the verified installer")
+	}
+	if strings.Contains(got["PATH"], wrapper) {
+		t.Fatal("previous SLSsteam wrapper leaked into PATH")
 	}
 }
 
