@@ -123,7 +123,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before changing code, copy, catalogs, or 
 - [x] Automatic Steam restart after rollback.
 - [x] Transactional complete removal.
 - [x] TUI-only operational interface.
-- [ ] Real CachyOS hardware validation.
+- [x] Real CachyOS hardware validation.
 - [ ] Signed catalog and releases.
 - [ ] Native Flatpak Steam support.
 - [ ] Snapshot retention policy.
