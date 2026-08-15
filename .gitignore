@@ -1,0 +1,6 @@
+/bin/
+/dist/
+/coverage.out
+*.log
+.idea/
+.vscode/
