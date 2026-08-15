@@ -63,3 +63,25 @@ func TestCatalogRejectsDependencyCycle(t *testing.T) {
 		t.Fatalf("Validate() error = %v, want cycle error", err)
 	}
 }
+
+func TestCatalogRejectsChangedVerifiedScriptContract(t *testing.T) {
+	catalog, err := LoadStable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog.Components[0].Install.Arguments = []string{"install", "--system"}
+	if err := catalog.Validate(); err == nil || !strings.Contains(err.Error(), "single install argument") {
+		t.Fatalf("Validate() error = %v, want verified-script contract error", err)
+	}
+}
+
+func TestCatalogRejectsUnsafeInstallMarker(t *testing.T) {
+	catalog, err := LoadStable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog.Components[1].Install.Validate = append(catalog.Components[1].Install.Validate, "../escape")
+	if err := catalog.Validate(); err == nil || !strings.Contains(err.Error(), "unsafe relative install path") {
+		t.Fatalf("Validate() error = %v, want unsafe path error", err)
+	}
+}

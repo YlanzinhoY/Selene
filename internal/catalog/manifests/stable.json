@@ -34,9 +34,13 @@
         "format": "zip"
       },
       "install": {
-        "strategy": "native-adapter",
-        "destination": "${XDG_DATA_HOME}/SLSsteam",
+        "strategy": "verified-script",
+        "destination": "${HOME}/.local/share/SLSsteam",
         "strip_components": 1,
+        "entrypoint": "setup.sh",
+        "arguments": [
+          "install"
+        ],
         "executables": [
           "ensure-desktop-coverage.sh",
           "bin/pattern-refresh"
@@ -71,7 +75,7 @@
       },
       "install": {
         "strategy": "extract",
-        "destination": "${XDG_DATA_HOME}/Lumen",
+        "destination": "${HOME}/.local/share/Lumen",
         "strip_components": 0,
         "executables": [
           "lumen",
@@ -106,7 +110,7 @@
       },
       "install": {
         "strategy": "replace-preserve",
-        "destination": "${XDG_DATA_HOME}/Lumen/luatools",
+        "destination": "${HOME}/.local/share/Lumen/luatools",
         "strip_components": 0,
         "preserve": [
           "backend/data"
@@ -145,7 +149,7 @@
       },
       "install": {
         "strategy": "copy",
-        "destination": "${XDG_DATA_HOME}/CloudRedirect/cloud_redirect.so",
+        "destination": "${HOME}/.local/share/CloudRedirect/cloud_redirect.so",
         "strip_components": 0,
         "validate": [
           "cloud_redirect.so"

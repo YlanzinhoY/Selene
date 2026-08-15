@@ -15,17 +15,15 @@ func TestBuildLuaToolsPlan(t *testing.T) {
 	}
 	env := Environment{
 		OS: "linux", Arch: "amd64", Home: "/home/player",
-		XDGDataHome: "/home/player/.local/share", XDGCacheHome: "/home/player/.cache",
+		XDGDataHome: "/mnt/player-data", XDGCacheHome: "/home/player/.cache",
+		XDGStateHome: "/home/player/.local/state",
 	}
 	plan, err := Build(source, "luatools", env)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Ready {
-		t.Fatal("plan should remain blocked until the slsteam native adapter exists")
-	}
-	if len(plan.Blockers) != 1 || !strings.Contains(plan.Blockers[0], "adaptador Go") {
-		t.Fatalf("Blockers = %#v", plan.Blockers)
+	if !plan.Ready || len(plan.Blockers) != 0 {
+		t.Fatalf("plan should be ready on linux/amd64, blockers = %#v", plan.Blockers)
 	}
 	if len(plan.Operations) < 15 {
 		t.Fatalf("Operations = %d, want a detailed plan", len(plan.Operations))
@@ -37,7 +35,7 @@ func TestBuildLuaToolsPlan(t *testing.T) {
 			pluginTarget = operation.Target
 		}
 	}
-	want := filepath.Join("/home/player/.local/share", "Lumen", "luatools")
+	want := filepath.Join("/home/player", ".local", "share", "Lumen", "luatools")
 	if pluginTarget != want {
 		t.Fatalf("plugin target = %q, want %q", pluginTarget, want)
 	}
@@ -55,8 +53,8 @@ func TestBuildAddsPlatformBlocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Blockers) != 2 {
-		t.Fatalf("Blockers = %#v, want platform and adapter blockers", plan.Blockers)
+	if len(plan.Blockers) != 1 {
+		t.Fatalf("Blockers = %#v, want only the platform blocker", plan.Blockers)
 	}
 }
 

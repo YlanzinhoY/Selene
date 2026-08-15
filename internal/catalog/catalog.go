@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"slices"
 	"strings"
 )
@@ -64,6 +65,8 @@ type InstallSpec struct {
 	Strategy        string   `json:"strategy"`
 	Destination     string   `json:"destination"`
 	StripComponents int      `json:"strip_components"`
+	Entrypoint      string   `json:"entrypoint,omitempty"`
+	Arguments       []string `json:"arguments,omitempty"`
 	Preserve        []string `json:"preserve,omitempty"`
 	Executables     []string `json:"executables,omitempty"`
 	Validate        []string `json:"validate"`
@@ -225,11 +228,40 @@ func validateComponent(component Component) error {
 	if component.Install.Strategy == "" || component.Install.Destination == "" {
 		return errors.New("install strategy and destination are required")
 	}
-	if !strings.HasPrefix(component.Install.Destination, "${XDG_DATA_HOME}/") {
-		return errors.New("install destination must be inside XDG_DATA_HOME")
+	if !slices.Contains([]string{"extract", "replace-preserve", "copy", "verified-script"}, component.Install.Strategy) {
+		return fmt.Errorf("unsupported install strategy %q", component.Install.Strategy)
+	}
+	if !strings.HasPrefix(component.Install.Destination, "${XDG_DATA_HOME}/") &&
+		!strings.HasPrefix(component.Install.Destination, "${HOME}/") {
+		return errors.New("install destination must be inside HOME or XDG_DATA_HOME")
 	}
 	if len(component.Install.Validate) == 0 {
 		return errors.New("at least one validation marker is required")
+	}
+	for _, marker := range append(append(append([]string(nil), component.Install.Validate...), component.Install.Executables...), component.Install.Preserve...) {
+		if marker == "" || strings.HasPrefix(marker, "/") || strings.Contains(marker, `\`) {
+			return fmt.Errorf("unsafe relative install path %q", marker)
+		}
+		cleaned := path.Clean(marker)
+		if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || cleaned != marker {
+			return fmt.Errorf("unsafe relative install path %q", marker)
+		}
+	}
+	if component.Install.Strategy == "verified-script" {
+		entrypoint := component.Install.Entrypoint
+		if entrypoint == "" || strings.HasPrefix(entrypoint, "/") || strings.Contains(entrypoint, `\`) {
+			return errors.New("verified script entrypoint must be a safe relative path")
+		}
+		cleaned := path.Clean(entrypoint)
+		if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+			return errors.New("verified script entrypoint escapes the staged artifact")
+		}
+		if !slices.Contains(component.Install.Validate, cleaned) {
+			return errors.New("verified script entrypoint must also be a validation marker")
+		}
+		if len(component.Install.Arguments) != 1 || component.Install.Arguments[0] != "install" {
+			return errors.New("verified script must declare the single install argument")
+		}
 	}
 	return nil
 }

@@ -12,11 +12,13 @@ import (
 
 // Environment contains only the host values needed to produce a plan.
 type Environment struct {
-	OS           string `json:"os"`
-	Arch         string `json:"arch"`
-	Home         string `json:"home"`
-	XDGDataHome  string `json:"xdg_data_home"`
-	XDGCacheHome string `json:"xdg_cache_home"`
+	OS            string `json:"os"`
+	Arch          string `json:"arch"`
+	Home          string `json:"home"`
+	XDGDataHome   string `json:"xdg_data_home"`
+	XDGCacheHome  string `json:"xdg_cache_home"`
+	XDGConfigHome string `json:"xdg_config_home"`
+	XDGStateHome  string `json:"xdg_state_home"`
 }
 
 // Operation is one explicit, reviewable action in an installation plan.
@@ -54,12 +56,22 @@ func DetectEnvironment() (Environment, error) {
 	if cacheHome == "" {
 		cacheHome = filepath.Join(home, ".cache")
 	}
+	configHome := os.Getenv("XDG_CONFIG_HOME")
+	if configHome == "" {
+		configHome = filepath.Join(home, ".config")
+	}
+	stateHome := os.Getenv("XDG_STATE_HOME")
+	if stateHome == "" {
+		stateHome = filepath.Join(home, ".local", "state")
+	}
 	return Environment{
-		OS:           runtime.GOOS,
-		Arch:         runtime.GOARCH,
-		Home:         filepath.Clean(home),
-		XDGDataHome:  filepath.Clean(dataHome),
-		XDGCacheHome: filepath.Clean(cacheHome),
+		OS:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
+		Home:          filepath.Clean(home),
+		XDGDataHome:   filepath.Clean(dataHome),
+		XDGCacheHome:  filepath.Clean(cacheHome),
+		XDGConfigHome: filepath.Clean(configHome),
+		XDGStateHome:  filepath.Clean(stateHome),
 	}, nil
 }
 
@@ -94,6 +106,10 @@ func Build(source catalog.Catalog, bundleID string, env Environment) (Plan, erro
 	}
 	add(Operation{
 		Phase: "preflight", Action: "Confirmar que Steam e Lumen podem ser encerrados antes da instalação", Risk: "medium",
+	})
+	add(Operation{
+		Phase: "snapshot", Action: "Salvar arquivos afetados e abrir um journal persistente para rollback",
+		Target: filepath.Join(env.XDGStateHome, "selene", "transactions"), Risk: "medium",
 	})
 
 	for _, component := range components {
@@ -130,34 +146,38 @@ func Build(source catalog.Catalog, bundleID string, env Environment) (Plan, erro
 				Target: destination, Risk: "medium",
 			})
 		}
-		add(Operation{
-			Phase: "activate", Component: component.ID,
-			Action: "Ativar a árvore preparada por troca atômica e registrar rollback",
-			Target: destination, Risk: "medium",
-		})
 
-		if component.Install.Strategy == "native-adapter" {
-			plan.Blockers = append(plan.Blockers,
-				"o adaptador Go do slsteam-moon ainda precisa reproduzir com segurança o wrapper LD_AUDIT, entradas desktop e serviços do usuário")
+		if component.Install.Strategy == "verified-script" {
 			add(Operation{
 				Phase: "configure", Component: component.ID,
-				Action: "Configurar integração da Steam usando o adaptador nativo do Selene (pendente)",
+				Action: "Executar o setup.sh fixado e verificado com sudo bloqueado e escopo somente do usuário",
 				Target: destination, Risk: "high",
+			})
+		} else {
+			add(Operation{
+				Phase: "activate", Component: component.ID,
+				Action: "Ativar a árvore preparada por troca atômica e registrar rollback",
+				Target: destination, Risk: "medium",
 			})
 		}
 	}
 
 	add(Operation{
-		Phase: "verify", Action: "Executar diagnóstico pós-instalação e restaurar o snapshot se houver falha", Risk: "medium",
+		Phase: "verify", Action: "Validar os arquivos instalados; em qualquer falha, parar serviços e restaurar o snapshot", Risk: "medium",
 	})
 	plan.Ready = len(plan.Blockers) == 0
 	return plan, nil
 }
 
 func expandDestination(value string, env Environment) (string, error) {
-	const token = "${XDG_DATA_HOME}"
-	if !strings.HasPrefix(value, token+"/") {
-		return "", fmt.Errorf("destination %q is outside XDG_DATA_HOME", value)
+	var base, token string
+	switch {
+	case strings.HasPrefix(value, "${XDG_DATA_HOME}/"):
+		base, token = env.XDGDataHome, "${XDG_DATA_HOME}"
+	case strings.HasPrefix(value, "${HOME}/"):
+		base, token = env.Home, "${HOME}"
+	default:
+		return "", fmt.Errorf("destination %q is outside HOME and XDG_DATA_HOME", value)
 	}
 	relative := strings.TrimPrefix(value, token+"/")
 	if relative == "" {
@@ -169,7 +189,7 @@ func expandDestination(value string, env Environment) (string, error) {
 			return "", fmt.Errorf("destination contains unsafe path segment")
 		}
 	}
-	return filepath.Join(append([]string{env.XDGDataHome}, parts...)...), nil
+	return filepath.Join(append([]string{base}, parts...)...), nil
 }
 
 func shortHash(value string) string {
