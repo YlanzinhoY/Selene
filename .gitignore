@@ -1,5 +1,6 @@
 /bin/
 /dist/
+/build/
 /coverage.out
 /.audit/
 *.log

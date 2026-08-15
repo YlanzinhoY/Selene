@@ -74,3 +74,25 @@ func TestFetchRejectsUnknownBundleBeforeNetwork(t *testing.T) {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
 	}
 }
+
+func TestInstallRequiresExplicitConfirmation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"install"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("Run(install) code = %d, want 2; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "selene install --yes") || !strings.Contains(stdout.String(), "rollback") {
+		t.Fatalf("install confirmation is incomplete: %q", stdout.String())
+	}
+}
+
+func TestRollbackRequiresExplicitConfirmation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"rollback", "transaction-id"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("Run(rollback) code = %d, want 2", code)
+	}
+	if !strings.Contains(stdout.String(), "rollback --yes transaction-id") {
+		t.Fatalf("rollback confirmation is incomplete: %q", stdout.String())
+	}
+}

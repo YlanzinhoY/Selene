@@ -4,7 +4,7 @@
 
 Selene é um projeto comunitário e independente, escrito em Go, para facilitar o uso do ecossistema LuaTools no Linux. A proposta é reunir instalação, diagnóstico, atualização e rollback em uma experiência segura para quem joga pela Steam — inclusive com Proton.
 
-O projeto está em fase inicial. A versão atual possui uma TUI, diagnóstico de plataforma/Steam/Proton, planejador e cache de artefatos reais fixados por SHA-256. O Selene ainda não instala o LuaTools nem altera a Steam; a única escrita disponível é o download explícito para o cache do próprio usuário.
+O projeto está em fase inicial. A versão atual possui TUI, diagnóstico de plataforma/Steam/Proton, catálogo fixado por SHA-256 e instalação transacional do stack LuaTools. A integração real ainda precisa ser validada em uma máquina CachyOS antes da primeira release pública.
 
 ## Objetivos
 
@@ -35,8 +35,14 @@ selene plan
 selene plan --json luatools
 selene fetch
 selene fetch --json luatools
+selene install                 # mostra o plano e não altera nada
+selene install --yes           # confirma a instalação
+selene history
+selene rollback --yes          # restaura o snapshot mais recente
 selene version
 ```
+
+A instalação atual requer Linux `amd64`, Steam nativa inicializada ao menos uma vez e uma sessão de usuário normal. Steam Flatpak ainda pode ser diagnosticada, mas não é um alvo de instalação. Proton não é bloqueado: ele continua executando os jogos normalmente sob a Steam nativa; o Selene atua na camada do cliente Steam e do Lumen.
 
 O catálogo está em [`internal/catalog/manifests/stable.json`](internal/catalog/manifests/stable.json). Ele fixa as releases `v2.8` atuais de slsteam-moon, Lumen e LuaTools Moon, incluindo URL HTTPS, tamanho e SHA-256 de cada pacote. Consulte [`docs/CATALOG.md`](docs/CATALOG.md) antes de atualizá-lo.
 
@@ -81,6 +87,8 @@ internal/artifact/ download, SHA-256 e inspeção segura dos pacotes
 internal/catalog/ catálogo embutido e validação dos manifestos
 internal/doctor/  diagnóstico somente leitura
 internal/planner/ plano de instalação auditável
+internal/installer/ executor user-only e integração upstream
+internal/transaction/ snapshot, journal e rollback
 internal/ui/      interface Charm
 internal/version/ informações de build
 docs/             decisões e documentação técnica
@@ -88,7 +96,9 @@ docs/             decisões e documentação técnica
 
 ## Segurança
 
-Selene não executará scripts remotos com `curl | bash`. O downloader usa HTTPS, confere tamanho e SHA-256 durante o streaming e inspeciona os ZIPs antes de aceitá-los no cache. A instalação futura deverá usar diretórios temporários protegidos, transações, backups e rollback automático.
+Selene não executa `curl | bash` nem busca um instalador mutável em `main`. O downloader usa HTTPS, confere tamanho e SHA-256 durante o streaming e inspeciona os ZIPs antes de aceitá-los. O `setup.sh` executado vem de uma release fixada do slsteam-moon, é extraído em staging privado e roda com `SLSM_IMMUTABLE=1`, `SLSM_SUDO_DENIED=1` e variáveis de injeção removidas.
+
+Antes de executar esse setup, o Selene salva os caminhos afetados. Falhas acionam o uninstaller verificado, param os serviços criados e restauram o snapshot. Um commit bem-sucedido mantém os dados de rollback em `XDG_STATE_HOME/selene/transactions`. Consulte [docs/TRANSACTIONS.md](docs/TRANSACTIONS.md).
 
 Relate vulnerabilidades de forma responsável seguindo o arquivo [SECURITY.md](SECURITY.md).
 
@@ -103,9 +113,11 @@ Relate vulnerabilidades de forma responsável seguindo o arquivo [SECURITY.md](S
 - [x] cache com download verificado e inspeção segura de ZIP;
 - [ ] testes reais no CachyOS;
 - [ ] assinatura do catálogo e das releases;
-- [ ] instalação transacional;
-- [ ] backup, rollback e desinstalação;
-- [ ] integração com LuaTools Moon, slsteam-moon e Lumen;
+- [x] instalação user-only transacional;
+- [x] backup, journal e rollback manual/automático;
+- [x] integração fixada com LuaTools Moon, slsteam-moon e Lumen;
+- [ ] suporte à Steam Flatpak;
+- [ ] política de retenção/limpeza de snapshots;
 - [ ] pacotes para GitHub Releases e AUR.
 
 ## Independência

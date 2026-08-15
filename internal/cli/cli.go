@@ -14,6 +14,7 @@ import (
 	"github.com/selene-linux/selene/internal/artifact"
 	"github.com/selene-linux/selene/internal/catalog"
 	"github.com/selene-linux/selene/internal/doctor"
+	"github.com/selene-linux/selene/internal/installer"
 	"github.com/selene-linux/selene/internal/planner"
 	"github.com/selene-linux/selene/internal/ui"
 	"github.com/selene-linux/selene/internal/version"
@@ -28,6 +29,9 @@ Uso:
   selene catalog         Lista bundles e componentes verificados
   selene plan [bundle]   Mostra todas as alterações sem aplicá-las
   selene fetch [bundle]  Baixa e verifica artefatos no cache
+  selene install --yes   Instala com snapshot e rollback automático
+  selene history         Lista transações de instalação
+  selene rollback --yes  Desfaz a instalação mais recente
   selene version         Exibe a versão
   selene help            Exibe esta ajuda
 `
@@ -51,6 +55,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runPlan(args[1:], stdout, stderr)
 	case "fetch":
 		return runFetch(args[1:], stdout, stderr)
+	case "install":
+		return runInstall(args[1:], stdout, stderr)
+	case "history":
+		return runHistory(args[1:], stdout, stderr)
+	case "rollback":
+		return runRollback(args[1:], stdout, stderr)
 	case "version", "--version", "-v":
 		fmt.Fprintf(stdout, "selene %s (commit %s, build %s)\n", version.Version, version.Commit, version.Date)
 		return 0
@@ -61,6 +71,174 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "selene: comando desconhecido %q\n\n%s", args[0], usage)
 		return 2
 	}
+}
+
+func runInstall(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("install", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	confirmed := flags.Bool("yes", false, "confirma a instalação e o encerramento da Steam")
+	jsonOutput := flags.Bool("json", false, "emite o resultado em JSON")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() > 1 {
+		fmt.Fprintln(stderr, "selene install: informe no máximo um bundle")
+		return 2
+	}
+	bundleID := "luatools"
+	if flags.NArg() == 1 {
+		bundleID = flags.Arg(0)
+	}
+
+	source, err := catalog.LoadStable()
+	if err != nil {
+		fmt.Fprintf(stderr, "selene install: %v\n", err)
+		return 1
+	}
+	env, err := planner.DetectEnvironment()
+	if err != nil {
+		fmt.Fprintf(stderr, "selene install: %v\n", err)
+		return 1
+	}
+	plan, err := planner.Build(source, bundleID, env)
+	if err != nil {
+		fmt.Fprintf(stderr, "selene install: %v\n", err)
+		return 1
+	}
+	if !*confirmed {
+		printPlan(stdout, plan)
+		fmt.Fprintln(stdout, "\nA instalação encerrará Steam/Lumen, executará o setup verificado sem sudo e criará rollback.")
+		fmt.Fprintf(stdout, "Para confirmar: selene install --yes %s\n", bundleID)
+		return 2
+	}
+	if !plan.Ready {
+		printPlan(stderr, plan)
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	progress := stdout
+	if *jsonOutput {
+		progress = stderr
+	}
+	result, err := installer.Install(ctx, source, bundleID, env, installer.Options{Output: progress})
+	if err != nil {
+		fmt.Fprintf(stderr, "selene install: %v\n", err)
+		return 1
+	}
+	if *jsonOutput {
+		if err := writeJSON(stdout, result); err != nil {
+			fmt.Fprintf(stderr, "selene install: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	fmt.Fprintf(stdout, "\nLuaTools instalado. Transação: %s\n", result.TransactionID)
+	fmt.Fprintln(stdout, "Para desfazer: selene rollback --yes")
+	return 0
+}
+
+func runHistory(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("history", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	jsonOutput := flags.Bool("json", false, "emite as transações em JSON")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintf(stderr, "selene history: argumento inesperado %q\n", flags.Arg(0))
+		return 2
+	}
+	env, err := planner.DetectEnvironment()
+	if err != nil {
+		fmt.Fprintf(stderr, "selene history: %v\n", err)
+		return 1
+	}
+	history, err := installer.History(env)
+	if err != nil {
+		fmt.Fprintf(stderr, "selene history: %v\n", err)
+		return 1
+	}
+	if *jsonOutput {
+		if err := writeJSON(stdout, history); err != nil {
+			fmt.Fprintf(stderr, "selene history: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if len(history) == 0 {
+		fmt.Fprintln(stdout, "Nenhuma transação do Selene encontrada.")
+		return 0
+	}
+	fmt.Fprintln(stdout, "Transações Selene (mais recente primeiro):")
+	fmt.Fprintln(stdout)
+	for _, journal := range history {
+		fmt.Fprintf(stdout, "%-30s %-12s %s\n", journal.ID, journal.State, journal.Description)
+		if journal.Error != "" {
+			fmt.Fprintf(stdout, "  erro: %s\n", journal.Error)
+		}
+	}
+	return 0
+}
+
+func runRollback(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("rollback", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	confirmed := flags.Bool("yes", false, "confirma a restauração do snapshot")
+	jsonOutput := flags.Bool("json", false, "emite o resultado em JSON")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() > 1 {
+		fmt.Fprintln(stderr, "selene rollback: informe no máximo um ID de transação")
+		return 2
+	}
+	id := ""
+	if flags.NArg() == 1 {
+		id = flags.Arg(0)
+	}
+	if !*confirmed {
+		target := "a instalação mais recente"
+		if id != "" && id != "latest" {
+			target = "a transação " + id
+		}
+		fmt.Fprintf(stdout, "O rollback restaurará %s e encerrará os serviços do slsteam-moon.\n", target)
+		fmt.Fprintln(stdout, "Para confirmar: selene rollback --yes"+formatOptionalID(id))
+		return 2
+	}
+	env, err := planner.DetectEnvironment()
+	if err != nil {
+		fmt.Fprintf(stderr, "selene rollback: %v\n", err)
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	progress := stdout
+	if *jsonOutput {
+		progress = stderr
+	}
+	result, err := installer.Rollback(ctx, env, id, progress)
+	if err != nil {
+		fmt.Fprintf(stderr, "selene rollback: %v\n", err)
+		return 1
+	}
+	if *jsonOutput {
+		if err := writeJSON(stdout, result); err != nil {
+			fmt.Fprintf(stderr, "selene rollback: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	fmt.Fprintf(stdout, "Estado anterior restaurado pela transação %s.\n", result.TransactionID)
+	return 0
+}
+
+func formatOptionalID(id string) string {
+	if id == "" || id == "latest" {
+		return ""
+	}
+	return " " + id
 }
 
 func runFetch(args []string, stdout, stderr io.Writer) int {

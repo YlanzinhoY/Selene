@@ -1,6 +1,6 @@
 # Segurança
 
-O Selene ainda está em estágio inicial e não realiza instalação nem modifica a Steam. O comando `fetch` escreve somente no cache do usuário.
+O Selene está em estágio inicial. `install --yes` modifica a integração da Steam no escopo do usuário; `fetch` escreve somente no cache.
 
 ## Relatando uma vulnerabilidade
 
@@ -15,7 +15,7 @@ Inclua no relato:
 - impacto observado;
 - logs sem tokens, credenciais ou dados pessoais.
 
-## Regras para futuras instalações
+## Regras da instalação
 
 - downloads devem usar HTTPS e validação criptográfica;
 - arquivos nunca devem ser extraídos fora do destino esperado;
@@ -24,6 +24,17 @@ Inclua no relato:
 - backups devem existir antes de qualquer substituição;
 - falhas devem acionar rollback quando possível;
 - nenhuma credencial da Steam deve ser lida ou armazenada.
+
+O adaptador atual executa o `setup.sh` presente no ZIP fixado do slsteam-moon. Ele nunca executa o `install.sh` da branch `main`. Antes da execução, o Selene:
+
+- confere tamanho e SHA-256 do artefato;
+- rejeita ZIP inseguro e extrai em um staging privado;
+- cria um snapshot persistente de todos os destinos conhecidos;
+- recusa root e exige Steam nativa inicializada;
+- remove variáveis `LD_*` herdadas;
+- define `SLSM_IMMUTABLE=1` e `SLSM_SUDO_DENIED=1` para impedir alterações de sistema e prompts administrativos.
+
+Snapshots podem conter cópias de configurações do próprio usuário. Eles ficam sob `XDG_STATE_HOME/selene/transactions` em diretórios privados e ainda não possuem expiração automática.
 
 ## Artefatos
 

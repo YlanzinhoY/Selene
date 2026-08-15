@@ -44,6 +44,8 @@ Nunca use apenas o nome `latest` no catálogo estável. A URL deve conter uma ta
 - `extract`: conteúdo preparado e ativado em um destino do usuário;
 - `replace-preserve`: substituição transacional com preservação dos dados declarados;
 - `copy`: cópia verificada de um único arquivo;
-- `native-adapter`: integração que exige operações específicas implementadas e testadas em Go.
+- `verified-script`: executa um entrypoint que pertence ao próprio artefato fixado, somente depois de verificar e criar o snapshot.
 
-O slsteam-moon usa `native-adapter` porque seu instalador gera um wrapper com `LD_AUDIT`, configura entradas desktop, PATH e serviços do usuário. Enquanto esse adaptador estiver pendente, o plano será informativo e não executável.
+O slsteam-moon usa `verified-script` porque seu projeto é a fonte da lógica que gera o wrapper `LD_AUDIT`, configura entradas desktop, PATH e serviços do usuário. O manifesto precisa declarar `setup.sh` simultaneamente como `entrypoint` e marcador de validação, com o argumento exato `install`. O adaptador Selene executa esse script com acesso administrativo bloqueado.
+
+Os destinos de slsteam-moon e Lumen usam `${HOME}/.local/share`, não `${XDG_DATA_HOME}`: essa escolha reproduz os caminhos que o wrapper upstream resolve em runtime e evita que o plano prometa uma árvore diferente da realmente utilizada.
