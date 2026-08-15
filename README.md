@@ -113,8 +113,22 @@ go run ./cmd/selene
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before changing code, copy, catalogs, or release artifacts.
 
-## Project status
+## Roadmap
 
-The transactional native-Steam workflow is implemented. Real CachyOS hardware validation is still in progress. Native Flatpak Steam support, signed releases, snapshot retention, and AUR packaging remain on the roadmap.
+- [x] Charm TUI.
+- [x] Linux, Steam, and Proton compatibility checks.
+- [x] Pinned real artifacts and SHA-256 verification.
+- [x] Transactional user-only installation.
+- [x] Persistent manual and automatic rollback.
+- [x] Automatic Steam restart after rollback.
+- [x] Transactional complete removal.
+- [x] TUI-only operational interface.
+- [ ] Real CachyOS hardware validation.
+- [ ] Signed catalog and releases.
+- [ ] Native Flatpak Steam support.
+- [ ] Snapshot retention policy.
+- [ ] Automated GitHub releases and AUR packaging.
+
+## Independence
 
 Selene is not affiliated with Valve, Steam, LuaTools, or the authors of the integrated components. Each upstream project retains its own authorship and license.
