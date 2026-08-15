@@ -51,7 +51,7 @@ PATH="$MOCK_BIN:$PATH" \
 	sh "$REPO_ROOT/install.sh"
 
 [ -x "$INSTALL_DIR/selene" ]
-"$INSTALL_DIR/selene" version >/dev/null
+"$INSTALL_DIR/selene" --version >/dev/null
 
 printf 'corruption' >> "$FIXTURES/selene-linux-amd64"
 if PATH="$MOCK_BIN:$PATH" \
@@ -59,7 +59,7 @@ if PATH="$MOCK_BIN:$PATH" \
 	SELENE_BASE_URL="https://downloads.invalid/selene" \
 	SELENE_INSTALL_DIR="$TEST_ROOT/rejected/bin" \
 	sh "$REPO_ROOT/install.sh" >"$TEST_ROOT/rejected.log" 2>&1; then
-	printf '%s\n' "test-install: checksum divergente foi aceito" >&2
+	printf '%s\n' "test-install: a mismatched checksum was accepted" >&2
 	exit 1
 fi
 [ ! -e "$TEST_ROOT/rejected/bin/selene" ]

@@ -24,29 +24,29 @@ fail() {
 
 usage() {
 	cat <<'EOF'
-Instala o binário do Selene no escopo do usuário.
+Installs the Selene binary for the current user.
 
-Uso:
-  sh install.sh [opções]
+Usage:
+  sh install.sh [options]
 
-Opções:
-  --version TAG       Instala uma release específica, por exemplo v0.1.0
-  --repo OWNER/REPO   Repositório GitHub (padrão: YlanzinhoY/Selene)
-  --install-dir DIR   Destino (padrão: ~/.local/bin)
-  --dry-run           Mostra URLs e destino sem baixar ou alterar arquivos
-  -h, --help          Mostra esta ajuda
+Options:
+  --version TAG       Install a specific release, for example v0.1.0
+  --repo OWNER/REPO   GitHub repository (default: YlanzinhoY/Selene)
+  --install-dir DIR   Destination (default: ~/.local/bin)
+  --dry-run           Show URLs and destination without changing files
+  -h, --help          Show this help
 
-Variáveis equivalentes:
+Equivalent environment variables:
   SELENE_VERSION, SELENE_REPO, SELENE_INSTALL_DIR, SELENE_BASE_URL
 
-Cada release precisa publicar estes dois assets:
+Each release must publish these two assets:
   selene-linux-amd64
   selene-linux-amd64.sha256
 EOF
 }
 
 require_value() {
-	[ "$#" -ge 2 ] || fail "a opção $1 exige um valor"
+	[ "$#" -ge 2 ] || fail "option $1 requires a value"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -79,35 +79,35 @@ while [ "$#" -gt 0 ]; do
 			break
 			;;
 		*)
-			fail "opção desconhecida: $1"
+			fail "unknown option: $1"
 			;;
 	esac
 done
 
-[ "$#" -eq 0 ] || fail "argumento inesperado: $1"
-[ "$(uname -s 2>/dev/null || true)" = "Linux" ] || fail "este instalador suporta somente Linux"
-[ "$(id -u 2>/dev/null || printf '0')" -ne 0 ] || fail "não execute este instalador como root"
-[ -n "${HOME:-}" ] || fail "a variável HOME não está definida"
+[ "$#" -eq 0 ] || fail "unexpected argument: $1"
+[ "$(uname -s 2>/dev/null || true)" = "Linux" ] || fail "this installer supports Linux only"
+[ "$(id -u 2>/dev/null || printf '0')" -ne 0 ] || fail "do not run this installer as root"
+[ -n "${HOME:-}" ] || fail "HOME is not set"
 
 case "$(uname -m 2>/dev/null || true)" in
 	x86_64|amd64) ARCH="amd64" ;;
-	*) fail "arquitetura não suportada; a release atual exige x86_64/amd64" ;;
+	*) fail "unsupported architecture; the current release requires x86_64/amd64" ;;
 esac
 
 case "$REPOSITORY" in
-	*[!A-Za-z0-9._/-]*|/*|*/|*//*|*/*/*) fail "repositório GitHub inválido: $REPOSITORY" ;;
+	*[!A-Za-z0-9._/-]*|/*|*/|*//*|*/*/*) fail "invalid GitHub repository: $REPOSITORY" ;;
 	*/*) : ;;
-	*) fail "use --repo no formato OWNER/REPO" ;;
+	*) fail "use --repo in OWNER/REPO format" ;;
 esac
 
 case "$VERSION" in
 	latest) : ;;
-	""|*[!A-Za-z0-9._-]*) fail "tag de release inválida: $VERSION" ;;
+	""|*[!A-Za-z0-9._-]*) fail "invalid release tag: $VERSION" ;;
 esac
 
 case "$INSTALL_DIR" in
 	/*) : ;;
-	*) fail "o diretório de instalação deve ser absoluto: $INSTALL_DIR" ;;
+	*) fail "the installation directory must be absolute: $INSTALL_DIR" ;;
 esac
 
 ASSET="${PROGRAM}-linux-${ARCH}"
@@ -116,7 +116,7 @@ CHECKSUM_ASSET="${ASSET}.sha256"
 if [ -n "$BASE_URL" ]; then
 	case "$BASE_URL" in
 		https://*) : ;;
-		*) fail "SELENE_BASE_URL precisa usar HTTPS" ;;
+		*) fail "SELENE_BASE_URL must use HTTPS" ;;
 	esac
 	DOWNLOAD_BASE="${BASE_URL%/}"
 elif [ "$VERSION" = "latest" ]; then
@@ -130,16 +130,16 @@ CHECKSUM_URL="${DOWNLOAD_BASE}/${CHECKSUM_ASSET}"
 DESTINATION="${INSTALL_DIR}/${PROGRAM}"
 
 if [ "$DRY_RUN" -eq 1 ]; then
-	say "Selene installer (simulação)"
+	say "Selene installer (dry run)"
 	say "  release:  $VERSION"
-	say "  binário: $BINARY_URL"
+	say "  binary:   $BINARY_URL"
 	say "  checksum: $CHECKSUM_URL"
-	say "  destino:  $DESTINATION"
+	say "  target:   $DESTINATION"
 	exit 0
 fi
 
 for command in curl sha256sum mktemp awk tr cp chmod mkdir mv rm; do
-	command -v "$command" >/dev/null 2>&1 || fail "comando obrigatório não encontrado: $command"
+	command -v "$command" >/dev/null 2>&1 || fail "required command not found: $command"
 done
 
 cleanup() {
@@ -153,7 +153,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
-TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/selene-install.XXXXXX")" || fail "não foi possível criar o diretório temporário"
+TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/selene-install.XXXXXX")" || fail "could not create the temporary directory"
 BINARY_PATH="${TEMP_DIR}/${ASSET}"
 CHECKSUM_PATH="${TEMP_DIR}/${CHECKSUM_ASSET}"
 
@@ -174,34 +174,34 @@ download() {
 		"$url"
 }
 
-say "Baixando Selene ${VERSION} para Linux/${ARCH}..."
-download "$BINARY_URL" "$BINARY_PATH" || fail "falha ao baixar $BINARY_URL"
-download "$CHECKSUM_URL" "$CHECKSUM_PATH" || fail "a release não publicou o checksum obrigatório"
+say "Downloading Selene ${VERSION} for Linux/${ARCH}..."
+download "$BINARY_URL" "$BINARY_PATH" || fail "failed to download $BINARY_URL"
+download "$CHECKSUM_URL" "$CHECKSUM_PATH" || fail "the release did not publish the required checksum"
 
 EXPECTED="$(awk 'NF { print $1; exit }' "$CHECKSUM_PATH" | tr 'A-F' 'a-f')"
 case "$EXPECTED" in
-	*[!0-9a-f]*|"") fail "arquivo de checksum inválido" ;;
+	*[!0-9a-f]*|"") fail "invalid checksum file" ;;
 esac
-[ "${#EXPECTED}" -eq 64 ] || fail "o SHA-256 publicado não possui 64 caracteres"
+[ "${#EXPECTED}" -eq 64 ] || fail "the published SHA-256 does not contain 64 characters"
 
 ACTUAL="$(sha256sum "$BINARY_PATH" | awk '{ print $1 }' | tr 'A-F' 'a-f')"
-[ "$ACTUAL" = "$EXPECTED" ] || fail "SHA-256 divergente; o binário não será instalado"
+[ "$ACTUAL" = "$EXPECTED" ] || fail "SHA-256 mismatch; the binary will not be installed"
 
-mkdir -p -- "$INSTALL_DIR" || fail "não foi possível criar $INSTALL_DIR"
-[ ! -d "$DESTINATION" ] || fail "o destino é um diretório: $DESTINATION"
+mkdir -p -- "$INSTALL_DIR" || fail "could not create $INSTALL_DIR"
+[ ! -d "$DESTINATION" ] || fail "the destination is a directory: $DESTINATION"
 
-INSTALL_CANDIDATE="$(mktemp "${INSTALL_DIR}/.selene.XXXXXX")" || fail "não foi possível preparar a instalação atômica"
-cp -- "$BINARY_PATH" "$INSTALL_CANDIDATE" || fail "não foi possível copiar o binário verificado"
-chmod 0755 "$INSTALL_CANDIDATE" || fail "não foi possível tornar o binário executável"
-"$INSTALL_CANDIDATE" version >/dev/null 2>&1 || fail "o binário baixado não passou no autoteste"
-mv -f -- "$INSTALL_CANDIDATE" "$DESTINATION" || fail "não foi possível ativar $DESTINATION"
+INSTALL_CANDIDATE="$(mktemp "${INSTALL_DIR}/.selene.XXXXXX")" || fail "could not prepare the atomic installation"
+cp -- "$BINARY_PATH" "$INSTALL_CANDIDATE" || fail "could not copy the verified binary"
+chmod 0755 "$INSTALL_CANDIDATE" || fail "could not make the binary executable"
+"$INSTALL_CANDIDATE" --version >/dev/null 2>&1 || fail "the downloaded binary failed its self-test"
+mv -f -- "$INSTALL_CANDIDATE" "$DESTINATION" || fail "could not activate $DESTINATION"
 INSTALL_CANDIDATE=""
 
-say "Selene instalado em $DESTINATION"
+say "Selene installed at $DESTINATION"
 case ":${PATH:-}:" in
 	*":${INSTALL_DIR}:"*) say "Execute: selene" ;;
 	*)
-		say "Adicione o diretório ao PATH e abra outro terminal:"
+		say "Add the directory to PATH and open another terminal:"
 		say "  export PATH=\"${INSTALL_DIR}:\$PATH\""
 		;;
 esac
