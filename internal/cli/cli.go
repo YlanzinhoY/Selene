@@ -30,8 +30,9 @@ Uso:
   selene plan [bundle]   Mostra todas as alterações sem aplicá-las
   selene fetch [bundle]  Baixa e verifica artefatos no cache
   selene install --yes   Instala com snapshot e rollback automático
-  selene history         Lista transações de instalação
-  selene rollback --yes  Desfaz a instalação mais recente
+  selene history         Lista transações e snapshots do Selene
+  selene rollback --yes  Restaura a transação recuperável mais recente
+  selene uninstall --yes Remove LuaTools, Lumen e slsteam-moon completamente
   selene version         Exibe a versão
   selene help            Exibe esta ajuda
 `
@@ -61,6 +62,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runHistory(args[1:], stdout, stderr)
 	case "rollback":
 		return runRollback(args[1:], stdout, stderr)
+	case "uninstall":
+		return runUninstall(args[1:], stdout, stderr)
 	case "version", "--version", "-v":
 		fmt.Fprintf(stdout, "selene %s (commit %s, build %s)\n", version.Version, version.Commit, version.Date)
 		return 0
@@ -199,7 +202,7 @@ func runRollback(args []string, stdout, stderr io.Writer) int {
 		id = flags.Arg(0)
 	}
 	if !*confirmed {
-		target := "a instalação mais recente"
+		target := "a transação recuperável mais recente"
 		if id != "" && id != "latest" {
 			target = "a transação " + id
 		}
@@ -231,6 +234,74 @@ func runRollback(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	fmt.Fprintf(stdout, "Estado anterior restaurado pela transação %s.\n", result.TransactionID)
+	return 0
+}
+
+func runUninstall(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	confirmed := flags.Bool("yes", false, "confirma a remoção completa do stack LuaTools")
+	jsonOutput := flags.Bool("json", false, "emite o resultado em JSON")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintf(stderr, "selene uninstall: argumento inesperado %q\n", flags.Arg(0))
+		return 2
+	}
+	env, err := planner.DetectEnvironment()
+	if err != nil {
+		fmt.Fprintf(stderr, "selene uninstall: %v\n", err)
+		return 1
+	}
+	preview, err := installer.PreviewUninstall(env)
+	if err != nil {
+		fmt.Fprintf(stderr, "selene uninstall: %v\n", err)
+		return 1
+	}
+	if !*confirmed {
+		fmt.Fprintln(stdout, "A remoção completa apaga LuaTools, Lumen, slsteam-moon, configurações e integrações da Steam no seu usuário.")
+		fmt.Fprintln(stdout, "Seus jogos, a Steam, o executável do Selene, o cache e os snapshots não serão apagados.")
+		if !preview.Detected {
+			fmt.Fprintln(stdout, "\nNenhum vestígio gerenciado foi detectado no momento.")
+		} else {
+			fmt.Fprintln(stdout, "\nVestígios detectados:")
+			for _, trace := range preview.Traces {
+				fmt.Fprintln(stdout, "  - "+trace)
+			}
+		}
+		fmt.Fprintln(stdout, "\nPara confirmar: selene uninstall --yes")
+		return 2
+	}
+
+	source, err := catalog.LoadStable()
+	if err != nil {
+		fmt.Fprintf(stderr, "selene uninstall: %v\n", err)
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	progress := stdout
+	if *jsonOutput {
+		progress = stderr
+	}
+	result, err := installer.Uninstall(ctx, source, env, installer.Options{Output: progress})
+	if err != nil {
+		fmt.Fprintf(stderr, "selene uninstall: %v\n", err)
+		return 1
+	}
+	if *jsonOutput {
+		if err := writeJSON(stdout, result); err != nil {
+			fmt.Fprintf(stderr, "selene uninstall: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if !result.Removed {
+		fmt.Fprintln(stdout, "Nenhuma instalação gerenciada foi encontrada; nada foi alterado.")
+		return 0
+	}
+	fmt.Fprintf(stdout, "LuaTools, Lumen e slsteam-moon removidos. Transação de segurança: %s\n", result.TransactionID)
 	return 0
 }
 
@@ -426,13 +497,13 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 }
 
 func printPlan(w io.Writer, plan planner.Plan) {
-	fmt.Fprintf(w, "Plano Selene — %s\n", plan.BundleName)
+	fmt.Fprintf(w, "Detalhes da instalação — %s\n", plan.BundleName)
 	fmt.Fprintf(w, "Catálogo: %s\n", plan.CatalogRevision)
 	fmt.Fprintf(w, "Destino: %s/%s\n\n", plan.Environment.OS, plan.Environment.Arch)
 	if plan.Ready {
 		fmt.Fprintln(w, "Status: pronto para execução")
 	} else {
-		fmt.Fprintln(w, "Status: somente planejamento; existem bloqueios")
+		fmt.Fprintln(w, "Status: prévia disponível; existem bloqueios para instalar")
 		for _, blocker := range plan.Blockers {
 			fmt.Fprintf(w, "  ! %s\n", blocker)
 		}

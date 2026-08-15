@@ -31,6 +31,8 @@ const (
 	screenInstallResult
 	screenRollbackConfirm
 	screenRollbackResult
+	screenUninstallConfirm
+	screenUninstallResult
 	screenAbout
 )
 
@@ -70,32 +72,45 @@ type rollbackMsg struct {
 	err    error
 }
 
+type uninstallPreviewMsg struct {
+	preview installer.UninstallPreview
+	err     error
+}
+
+type uninstallMsg struct {
+	result installer.UninstallResult
+	log    string
+	err    error
+}
+
 type menuItem struct {
 	title       string
 	description string
 }
 
 type model struct {
-	width      int
-	height     int
-	cursor     int
-	screen     screen
-	ctx        context.Context
-	cancel     context.CancelFunc
-	checking   bool
-	mutating   bool
-	activity   string
-	spinner    spinner.Model
-	viewport   viewport.Model
-	report     *doctor.Report
-	plan       *planner.Plan
-	fetched    []artifact.Result
-	installed  *installer.Result
-	rolledBack *installer.RollbackResult
-	history    []transaction.Journal
-	log        string
-	err        error
-	items      []menuItem
+	width       int
+	height      int
+	cursor      int
+	screen      screen
+	ctx         context.Context
+	cancel      context.CancelFunc
+	checking    bool
+	mutating    bool
+	activity    string
+	spinner     spinner.Model
+	viewport    viewport.Model
+	report      *doctor.Report
+	plan        *planner.Plan
+	fetched     []artifact.Result
+	installed   *installer.Result
+	rolledBack  *installer.RollbackResult
+	removal     *installer.UninstallPreview
+	uninstalled *installer.UninstallResult
+	history     []transaction.Journal
+	log         string
+	err         error
+	items       []menuItem
 }
 
 var (
@@ -132,10 +147,11 @@ func newModel() model {
 		viewport: viewport.New(80, 15),
 		items: []menuItem{
 			{title: "Diagnosticar ambiente", description: "Verificar Linux, Steam, bibliotecas e Proton"},
-			{title: "Planejar instalação", description: "Revisar hashes e destinos sem alterar arquivos"},
+			{title: "Detalhes da instalação", description: "Ver o que será baixado e alterado antes de instalar"},
 			{title: "Baixar e verificar", description: "Guardar os pacotes verificados no cache do Selene"},
 			{title: "Instalar LuaTools", description: "Executar a fonte verificada com snapshot e rollback automático"},
-			{title: "Desfazer instalação", description: "Restaurar o snapshot mais recente do Selene"},
+			{title: "Desfazer última instalação", description: "Voltar exatamente ao estado anterior usando o snapshot"},
+			{title: "Remover LuaTools completamente", description: "Limpar LuaTools, Lumen e slsteam-moon do usuário"},
 			{title: "Sobre o Selene", description: "Conhecer a missão e o estado do projeto"},
 			{title: "Sair", description: "Fechar a interface"},
 		},
@@ -219,6 +235,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenRollbackResult
 		m.refreshViewport()
 		return m, nil
+	case uninstallPreviewMsg:
+		m.checking = false
+		m.activity = ""
+		m.err = msg.err
+		m.removal = &msg.preview
+		m.screen = screenUninstallConfirm
+		m.refreshViewport()
+		return m, nil
+	case uninstallMsg:
+		m.checking = false
+		m.mutating = false
+		m.activity = ""
+		m.err = msg.err
+		m.uninstalled = &msg.result
+		m.log = msg.log
+		m.screen = screenUninstallResult
+		m.refreshViewport()
+		return m, nil
 	case tea.KeyMsg:
 		key := msg.String()
 		if key == "ctrl+c" || key == "q" {
@@ -251,7 +285,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(m.spinner.Tick, runDoctor())
 				case 1:
 					m.checking = true
-					m.activity = "Montando um plano verificável sem aplicar mudanças..."
+					m.activity = "Carregando os detalhes sem aplicar mudanças..."
 					return m, tea.Batch(m.spinner.Tick, buildPlan())
 				case 2:
 					m.checking = true
@@ -266,8 +300,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = "Procurando snapshots que podem ser restaurados..."
 					return m, tea.Batch(m.spinner.Tick, previewRollback())
 				case 5:
-					m.screen = screenAbout
+					m.checking = true
+					m.activity = "Procurando tudo que faz parte da integração LuaTools..."
+					return m, tea.Batch(m.spinner.Tick, previewUninstall())
 				case 6:
+					m.screen = screenAbout
+				case 7:
 					return m, tea.Quit
 				}
 			}
@@ -291,7 +329,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "r":
 				m.checking = true
-				m.activity = "Atualizando o plano sem aplicar mudanças..."
+				m.activity = "Atualizando os detalhes sem aplicar mudanças..."
 				return m, tea.Batch(m.spinner.Tick, buildPlan())
 			}
 			var cmd tea.Cmd
@@ -342,7 +380,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
-		case screenInstallResult, screenRollbackResult:
+		case screenUninstallConfirm:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenHome
+				return m, nil
+			case "x":
+				if m.err == nil && m.removal != nil && m.removal.Detected {
+					m.checking = true
+					m.mutating = true
+					m.activity = "Removendo com snapshot de segurança. Não feche o Selene..."
+					return m, tea.Batch(m.spinner.Tick, uninstallBundle(m.ctx))
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenInstallResult, screenRollbackResult, screenUninstallResult:
 			if key == "esc" || key == "backspace" {
 				m.screen = screenHome
 				return m, nil
@@ -381,7 +435,8 @@ func (m model) View() string {
 			body = m.viewport.View()
 		case screenFetch:
 			body = m.viewport.View()
-		case screenInstallConfirm, screenInstallResult, screenRollbackConfirm, screenRollbackResult:
+		case screenInstallConfirm, screenInstallResult, screenRollbackConfirm, screenRollbackResult,
+			screenUninstallConfirm, screenUninstallResult:
 			body = m.viewport.View()
 		case screenAbout:
 			body = aboutView()
@@ -401,7 +456,9 @@ func (m model) View() string {
 		footerText = "↑/↓ rolar  •  i confirmar instalação  •  esc cancelar"
 	} else if m.screen == screenRollbackConfirm && !m.checking {
 		footerText = "↑/↓ rolar  •  d confirmar rollback  •  esc cancelar"
-	} else if (m.screen == screenInstallResult || m.screen == screenRollbackResult) && !m.checking {
+	} else if m.screen == screenUninstallConfirm && !m.checking {
+		footerText = "↑/↓ rolar  •  x confirmar remoção completa  •  esc cancelar"
+	} else if (m.screen == screenInstallResult || m.screen == screenRollbackResult || m.screen == screenUninstallResult) && !m.checking {
 		footerText = "↑/↓ rolar  •  esc voltar  •  q sair"
 	} else if m.mutating {
 		footerText = "Transação em andamento • aguarde o commit ou rollback automático"
@@ -494,6 +551,10 @@ func (m *model) refreshViewport() {
 		content = m.rollbackConfirmContent()
 	case screenRollbackResult:
 		content = m.rollbackResultContent()
+	case screenUninstallConfirm:
+		content = m.uninstallConfirmContent()
+	case screenUninstallResult:
+		content = m.uninstallResultContent()
 	default:
 		return
 	}
@@ -504,21 +565,21 @@ func (m *model) refreshViewport() {
 
 func (m model) planContent() string {
 	if m.err != nil {
-		return titleStyle.Render("Plano de instalação") + "\n\n" + errorStyle().Render("× "+m.err.Error())
+		return titleStyle.Render("Detalhes da instalação") + "\n\n" + errorStyle().Render("× "+m.err.Error())
 	}
 	if m.plan == nil {
-		return "Nenhum plano gerado."
+		return "Nenhum detalhe de instalação disponível."
 	}
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Plano de instalação · " + m.plan.BundleName))
+	b.WriteString(titleStyle.Render("Detalhes da instalação · " + m.plan.BundleName))
 	b.WriteString("\n")
 	b.WriteString(mutedStyle.Render("Catálogo " + m.plan.CatalogRevision))
 	b.WriteString("\n\n")
 	if m.plan.Ready {
-		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Render("✓ Plano pronto para execução"))
+		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Render("✓ Ambiente pronto para esta instalação"))
 	} else {
-		b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render("! Plano ainda não executável"))
+		b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render("! Esta instalação ainda possui bloqueios"))
 		b.WriteString("\n")
 		for _, blocker := range m.plan.Blockers {
 			b.WriteString("  " + mutedStyle.Render("· "+blocker) + "\n")
@@ -574,7 +635,7 @@ func (m model) installConfirmContent() string {
 		return titleStyle.Render("Confirmar instalação") + "\n\n" + errorStyle().Render("× "+m.err.Error())
 	}
 	if m.plan == nil {
-		return "Nenhum plano de instalação disponível."
+		return "Nenhum detalhe de instalação disponível."
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Confirmar instalação · " + m.plan.BundleName))
@@ -610,7 +671,7 @@ func (m model) installResultContent() string {
 		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render("✓ LuaTools instalado"))
 		b.WriteString("\n")
 		b.WriteString("Transação: " + m.installed.TransactionID + "\n")
-		b.WriteString(mutedStyle.Render("O snapshot foi mantido; use Desfazer instalação se precisar."))
+		b.WriteString(mutedStyle.Render("O snapshot foi mantido; use Desfazer última instalação se precisar."))
 		b.WriteString("\n\n")
 	}
 	if strings.TrimSpace(m.log) != "" {
@@ -623,20 +684,28 @@ func (m model) installResultContent() string {
 
 func (m model) rollbackConfirmContent() string {
 	if m.err != nil {
-		return titleStyle.Render("Desfazer instalação") + "\n\n" + errorStyle().Render("× "+m.err.Error())
+		return titleStyle.Render("Desfazer última instalação") + "\n\n" + errorStyle().Render("× "+m.err.Error())
 	}
 	journal := latestRestorable(m.history)
 	if journal == nil {
-		return titleStyle.Render("Desfazer instalação") + "\n\n" + mutedStyle.Render("Nenhum snapshot pendente de rollback foi encontrado.")
+		return titleStyle.Render("Desfazer última instalação") + "\n\n" + mutedStyle.Render("Nenhum snapshot pendente de rollback foi encontrado.")
+	}
+	heading := "Desfazer última instalação"
+	explanation := "O Selene parará o guardian, restaurará arquivos, diretórios, atalhos e links do systemd exatamente como estavam."
+	confirmation := "Pressione d para desfazer."
+	if strings.HasPrefix(journal.Description, "uninstall ") {
+		heading = "Recuperar remoção interrompida"
+		explanation = "A remoção não foi concluída. O Selene restaurará o stack instalado a partir do snapshot de segurança."
+		confirmation = "Pressione d para recuperar."
 	}
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Desfazer instalação"))
+	b.WriteString(titleStyle.Render(heading))
 	b.WriteString("\n\n")
 	b.WriteString("Snapshot: " + journal.ID + "\n")
 	b.WriteString("Criado em: " + journal.CreatedAt.Local().Format("02/01/2006 15:04:05") + "\n")
 	b.WriteString("Operação: " + journal.Description + "\n\n")
-	b.WriteString("O Selene parará o guardian, restaurará arquivos, diretórios, atalhos e links do systemd exatamente como estavam.\n\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render("Pressione d para desfazer."))
+	b.WriteString(explanation + "\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(confirmation))
 	b.WriteString("  " + mutedStyle.Render("Esc mantém a instalação atual."))
 	return b.String()
 }
@@ -661,10 +730,70 @@ func (m model) rollbackResultContent() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func (m model) uninstallConfirmContent() string {
+	if m.err != nil {
+		return titleStyle.Render("Remover LuaTools completamente") + "\n\n" + errorStyle().Render("× "+m.err.Error())
+	}
+	if m.removal == nil || !m.removal.Detected {
+		return titleStyle.Render("Remover LuaTools completamente") + "\n\n" +
+			mutedStyle.Render("Nenhum vestígio gerenciado de LuaTools, Lumen ou slsteam-moon foi encontrado.")
+	}
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Remover LuaTools completamente"))
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render("Esta opção é diferente de desfazer a última instalação."))
+	b.WriteString("\n\n")
+	b.WriteString("Ela remove LuaTools, Lumen, slsteam-moon, configurações, serviços e integrações da Steam no seu usuário. Dados internos do plugin também serão apagados.\n\n")
+	b.WriteString("Não remove seus jogos, a Steam, o Selene, o cache nem os snapshots de segurança.\n\n")
+	b.WriteString(mutedStyle.Render("Vestígios encontrados:"))
+	b.WriteString("\n")
+	for _, trace := range m.removal.Traces {
+		b.WriteString("  · " + trace + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString("O Selene criará outro snapshot antes de remover e restaurará a instalação se algo falhar.\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(errorColor).Bold(true).Render("Pressione x para remover completamente."))
+	b.WriteString("  " + mutedStyle.Render("Esc cancela sem alterar nada."))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) uninstallResultContent() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Resultado da remoção completa"))
+	b.WriteString("\n\n")
+	if m.err != nil {
+		b.WriteString(errorStyle().Render("× " + m.err.Error()))
+		b.WriteString("\n\n")
+	} else if m.uninstalled != nil && m.uninstalled.Removed {
+		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render("✓ Integração LuaTools removida"))
+		b.WriteString("\n")
+		b.WriteString("LuaTools, Lumen e slsteam-moon não estão mais integrados à Steam.\n")
+		b.WriteString("Transação de segurança: " + m.uninstalled.TransactionID + "\n\n")
+	} else {
+		b.WriteString(mutedStyle.Render("Nenhuma instalação gerenciada foi encontrada; nada foi alterado."))
+		b.WriteString("\n\n")
+	}
+	if strings.TrimSpace(m.log) != "" {
+		b.WriteString(mutedStyle.Render("Log da operação:"))
+		b.WriteString("\n")
+		b.WriteString(m.log)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func latestRestorable(history []transaction.Journal) *transaction.Journal {
 	for index := range history {
 		journal := &history[index]
-		if journal.State != transaction.StateRolledBack && strings.HasPrefix(journal.Description, "install ") {
+		if journal.State == transaction.StateRolledBack {
+			continue
+		}
+		if strings.HasPrefix(journal.Description, "uninstall ") {
+			if journal.State == transaction.StateCommitted {
+				return nil
+			}
+			return journal
+		}
+		if strings.HasPrefix(journal.Description, "install ") {
 			return journal
 		}
 	}
@@ -682,8 +811,8 @@ func aboutView() string {
 	return titleStyle.Render("Sobre o Selene") + "\n\n" +
 		"Selene é um gerenciador comunitário e independente para tornar o\n" +
 		"ecossistema LuaTools acessível no Linux. A prioridade é instalar,\n" +
-		"diagnosticar, atualizar e desfazer mudanças com segurança.\n\n" +
-		mutedStyle.Render("Estado atual: instalação user-only transacional com rollback persistente.")
+		"diagnosticar, atualizar, desfazer e remover com segurança.\n\n" +
+		mutedStyle.Render("Estado atual: instalação, rollback e remoção completa transacionais no usuário.")
 }
 
 func runDoctor() tea.Cmd {
@@ -790,6 +919,33 @@ func rollbackLatest(ctx context.Context) tea.Cmd {
 		var output bytes.Buffer
 		result, err := installer.Rollback(ctx, env, "", &output)
 		return rollbackMsg{result: result, log: output.String(), err: err}
+	}
+}
+
+func previewUninstall() tea.Cmd {
+	return func() tea.Msg {
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return uninstallPreviewMsg{err: err}
+		}
+		preview, err := installer.PreviewUninstall(env)
+		return uninstallPreviewMsg{preview: preview, err: err}
+	}
+}
+
+func uninstallBundle(ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		source, err := catalog.LoadStable()
+		if err != nil {
+			return uninstallMsg{err: err}
+		}
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return uninstallMsg{err: err}
+		}
+		var output bytes.Buffer
+		result, err := installer.Uninstall(ctx, source, env, installer.Options{Output: &output})
+		return uninstallMsg{result: result, log: output.String(), err: err}
 	}
 }
 

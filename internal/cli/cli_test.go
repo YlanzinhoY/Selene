@@ -99,3 +99,16 @@ func TestRollbackRequiresExplicitConfirmation(t *testing.T) {
 		t.Fatalf("rollback confirmation is incomplete: %q", stdout.String())
 	}
 }
+
+func TestUninstallRequiresExplicitConfirmation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"uninstall"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("Run(uninstall) code = %d, want 2; stderr=%q", code, stderr.String())
+	}
+	for _, expected := range []string{"LuaTools", "Lumen", "slsteam-moon", "uninstall --yes", "jogos"} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("uninstall confirmation does not mention %q: %q", expected, stdout.String())
+		}
+	}
+}

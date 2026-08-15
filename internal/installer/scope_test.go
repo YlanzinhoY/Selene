@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/selene-linux/selene/internal/planner"
+	"github.com/selene-linux/selene/internal/transaction"
 )
 
 func TestUserTransactionScopeContainsCriticalPaths(t *testing.T) {
@@ -33,6 +34,34 @@ func TestUserTransactionScopeContainsCriticalPaths(t *testing.T) {
 	}
 	if len(patterns) < 10 {
 		t.Fatalf("patterns = %d, want desktop and systemd coverage", len(patterns))
+	}
+}
+
+func TestCleanInstallRollbackRemovesEntireCreatedStack(t *testing.T) {
+	root := t.TempDir()
+	env := testEnvironment(root)
+	targets, patterns, err := userTransactionScope(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := transaction.Begin(filepath.Join(env.XDGStateHome, "selene"), "install luatools test", targets, patterns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slsteam := filepath.Join(stackDataHome(env), "SLSsteam", "SLSsteam.so")
+	lumen := filepath.Join(stackDataHome(env), "Lumen", "lumen")
+	writeInstallerFile(t, slsteam, "created")
+	writeInstallerFile(t, lumen, "created")
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Dir(slsteam), filepath.Dir(lumen)} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("rollback left a stack directory created by install: %s (err=%v)", path, err)
+		}
 	}
 }
 

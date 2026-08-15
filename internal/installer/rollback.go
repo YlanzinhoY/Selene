@@ -20,7 +20,7 @@ type RollbackResult struct {
 	State         string `json:"state"`
 }
 
-// History lists installation transactions newest first.
+// History lists Selene transactions newest first.
 func History(env planner.Environment) ([]transaction.Journal, error) {
 	return transaction.List(filepath.Join(env.XDGStateHome, "selene"))
 }
@@ -48,8 +48,10 @@ func Rollback(ctx context.Context, env planner.Environment, id string, output io
 	if err != nil {
 		return RollbackResult{}, err
 	}
-	if !strings.HasPrefix(tx.Journal.Description, "install ") {
-		return RollbackResult{}, errors.New("the selected journal is not a Selene installation transaction")
+	installation := strings.HasPrefix(tx.Journal.Description, "install ")
+	unfinishedRemoval := strings.HasPrefix(tx.Journal.Description, "uninstall ") && tx.Journal.State != transaction.StateCommitted
+	if !installation && !unfinishedRemoval {
+		return RollbackResult{}, errors.New("the selected journal is not a recoverable Selene transaction")
 	}
 
 	fmt.Fprintf(output, "Selene: restaurando o snapshot %s...\n", tx.Journal.ID)
@@ -83,6 +85,20 @@ func selectTransaction(stateRoot, id string) (*transaction.Transaction, error) {
 		if tx.Journal.State == transaction.StateRolledBack {
 			return nil, fmt.Errorf("transaction %s was already rolled back", id)
 		}
+		if strings.HasPrefix(tx.Journal.Description, "install ") {
+			journals, err := transaction.List(stateRoot)
+			if err != nil {
+				return nil, err
+			}
+			for _, journal := range journals {
+				if journal.ID == id {
+					break
+				}
+				if journal.State == transaction.StateCommitted && strings.HasPrefix(journal.Description, "uninstall ") {
+					return nil, errors.New("the selected installation predates a successful complete removal")
+				}
+			}
+		}
 		return tx, nil
 	}
 	journals, err := transaction.List(stateRoot)
@@ -90,10 +106,18 @@ func selectTransaction(stateRoot, id string) (*transaction.Transaction, error) {
 		return nil, err
 	}
 	for _, journal := range journals {
-		if journal.State == transaction.StateRolledBack || !strings.HasPrefix(journal.Description, "install ") {
+		if journal.State == transaction.StateRolledBack {
 			continue
 		}
-		return transaction.Open(stateRoot, journal.ID)
+		if strings.HasPrefix(journal.Description, "uninstall ") {
+			if journal.State == transaction.StateCommitted {
+				return nil, errors.New("no installation rollback is available after a successful complete removal")
+			}
+			return transaction.Open(stateRoot, journal.ID)
+		}
+		if strings.HasPrefix(journal.Description, "install ") {
+			return transaction.Open(stateRoot, journal.ID)
+		}
 	}
 	return nil, errors.New("no installation transaction is available for rollback")
 }
