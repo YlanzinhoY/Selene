@@ -14,7 +14,7 @@ O snapshot cobre:
 - `~/.local/share/SLSsteam` e `~/.local/share/Lumen`;
 - configuração e estado do slsteam-moon;
 - `.bashrc`, `.zshrc` e `.profile`;
-- entradas Steam do menu, autostart e Desktop no escopo do usuário;
+- entradas Steam do menu, autostart e Desktop, além do cache de associações regenerado no escopo do usuário;
 - units, drop-ins e links de ativação do guardian no systemd do usuário;
 - diretórios temporários usados na troca atômica do Lumen.
 

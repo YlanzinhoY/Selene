@@ -37,6 +37,7 @@ func userTransactionScope(env planner.Environment) ([]transaction.Target, []tran
 		{Path: filepath.Join(unitDir, "slsteam-desktop-guardian.timer")},
 		{Path: filepath.Join(unitDir, "default.target.wants", "slsteam-desktop-guardian.path")},
 		{Path: filepath.Join(unitDir, "timers.target.wants", "slsteam-desktop-guardian.timer")},
+		{Path: filepath.Join(env.XDGDataHome, "applications", "mimeinfo.cache")},
 	}
 
 	desktop := resolveDesktopDir(env)

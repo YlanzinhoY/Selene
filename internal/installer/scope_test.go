@@ -25,6 +25,7 @@ func TestUserTransactionScopeContainsCriticalPaths(t *testing.T) {
 		filepath.Join(env.Home, ".local", "share", "Lumen"),
 		filepath.Join(env.Home, ".bashrc"),
 		filepath.Join(env.XDGConfigHome, "systemd", "user", "timers.target.wants", "slsteam-desktop-guardian.timer"),
+		filepath.Join(env.XDGDataHome, "applications", "mimeinfo.cache"),
 	} {
 		if !contains(paths, required) {
 			t.Fatalf("scope does not contain %s: %#v", required, paths)
