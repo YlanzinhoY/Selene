@@ -47,3 +47,9 @@ O downloader atual:
 - grava primeiro em arquivo temporário com permissão restrita;
 - rejeita ZIPs com path traversal, links, entradas criptografadas, duplicatas ou expansão excessiva;
 - confirma os arquivos obrigatórios antes de ativar o cache.
+
+## Bootstrap do Selene
+
+O `install.sh` da raiz instala somente o executável do Selene no escopo do usuário. Ele aceita apenas Linux `amd64`, recusa root, usa HTTPS inclusive nos redirecionamentos, exige o asset `.sha256`, executa `selene version` como autoteste e ativa o arquivo por rename no mesmo diretório.
+
+O checksum publicado na mesma GitHub Release detecta corrupção ou troca isolada do binário, mas não substitui assinatura criptográfica e não protege contra comprometimento da conta/release. Assinatura dos artefatos permanece no roadmap. Recomenda-se baixar e revisar o bootstrap antes de executá-lo, como demonstrado no README.
