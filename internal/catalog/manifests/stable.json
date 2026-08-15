@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "revision": "2026-08-15-v2.8",
+  "channel": "stable",
+  "bundles": [
+    {
+      "id": "luatools",
+      "name": "LuaTools para Linux",
+      "description": "Stack principal com slsteam-moon, Lumen e o plugin LuaTools.",
+      "components": [
+        "slsteam-moon",
+        "lumen",
+        "luatools-moon"
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "slsteam-moon",
+      "name": "slsteam-moon",
+      "version": "v2.8",
+      "description": "Integração da Steam usada para iniciar o Lumen e o LuaTools.",
+      "dependencies": [],
+      "source": {
+        "provider": "github-release",
+        "repository": "swwayps/slsteam-moon",
+        "reference": "v2.8"
+      },
+      "artifact": {
+        "name": "slsteam-moon-linux-2.8-lumen.zip",
+        "url": "https://github.com/swwayps/slsteam-moon/releases/download/v2.8/slsteam-moon-linux-2.8-lumen.zip",
+        "size": 4875826,
+        "sha256": "dfe151119ad2783492c743d8f6386414b02a8aaef1ceb46579f18d1b054d6f18",
+        "format": "zip"
+      },
+      "install": {
+        "strategy": "native-adapter",
+        "destination": "${XDG_DATA_HOME}/SLSsteam",
+        "strip_components": 1,
+        "executables": [
+          "ensure-desktop-coverage.sh",
+          "bin/pattern-refresh"
+        ],
+        "validate": [
+          "setup.sh",
+          "bin/SLSsteam.so",
+          "bin/library-inject.so",
+          "res/config.yaml"
+        ]
+      }
+    },
+    {
+      "id": "lumen",
+      "name": "Lumen",
+      "version": "v2.8",
+      "description": "Sidecar que hospeda o backend e injeta o frontend do LuaTools.",
+      "dependencies": [
+        "slsteam-moon"
+      ],
+      "source": {
+        "provider": "github-release",
+        "repository": "swwayps/lumen",
+        "reference": "v2.8"
+      },
+      "artifact": {
+        "name": "lumen-linux.zip",
+        "url": "https://github.com/swwayps/lumen/releases/download/v2.8/lumen-linux.zip",
+        "size": 2760173,
+        "sha256": "6080547ec0116f9d5ad2c0ed70b0754f202be105e4cee73f6669645af9f90c7b",
+        "format": "zip"
+      },
+      "install": {
+        "strategy": "extract",
+        "destination": "${XDG_DATA_HOME}/Lumen",
+        "strip_components": 0,
+        "executables": [
+          "lumen",
+          "lua/restart_steam.sh"
+        ],
+        "validate": [
+          "lumen",
+          "lua/boot.lua",
+          "lua/injector.lua"
+        ]
+      }
+    },
+    {
+      "id": "luatools-moon",
+      "name": "LuaTools Moon",
+      "version": "v2.8",
+      "description": "Frontend e backend Lua do LuaTools para o Lumen.",
+      "dependencies": [
+        "lumen"
+      ],
+      "source": {
+        "provider": "github-release",
+        "repository": "swwayps/luatools-moon",
+        "reference": "v2.8"
+      },
+      "artifact": {
+        "name": "luatools-linux.zip",
+        "url": "https://github.com/swwayps/luatools-moon/releases/download/v2.8/luatools-linux.zip",
+        "size": 2074909,
+        "sha256": "41e3bec47702642192203ac303c8934e8f0de247b6ac42387c7948d1a1d4a004",
+        "format": "zip"
+      },
+      "install": {
+        "strategy": "replace-preserve",
+        "destination": "${XDG_DATA_HOME}/Lumen/luatools",
+        "strip_components": 0,
+        "preserve": [
+          "backend/data"
+        ],
+        "executables": [
+          "backend/bin/7zz"
+        ],
+        "validate": [
+          "plugin.json",
+          "backend/main.lua",
+          "public/luatools.js"
+        ]
+      }
+    },
+    {
+      "id": "cloudredirect-moon",
+      "name": "CloudRedirect Moon",
+      "version": "f07a3f59fec0",
+      "description": "Integração opcional de saves em nuvem usada pelo ecossistema Moon.",
+      "optional": true,
+      "dependencies": [
+        "slsteam-moon",
+        "lumen"
+      ],
+      "source": {
+        "provider": "github-raw",
+        "repository": "swwayps/cloudredirect-moon",
+        "reference": "f07a3f59fec0e8bf086e8951e404f373c3bc8dd9"
+      },
+      "artifact": {
+        "name": "cloud_redirect.so",
+        "url": "https://raw.githubusercontent.com/swwayps/cloudredirect-moon/f07a3f59fec0e8bf086e8951e404f373c3bc8dd9/cloud_redirect.so",
+        "size": 2053452,
+        "sha256": "e31f3cd3714c2c9a1faf441a8787fb5678b3fc4a674dc8d8ddf3e85654a55cd4",
+        "format": "file"
+      },
+      "install": {
+        "strategy": "copy",
+        "destination": "${XDG_DATA_HOME}/CloudRedirect/cloud_redirect.so",
+        "strip_components": 0,
+        "validate": [
+          "cloud_redirect.so"
+        ]
+      }
+    }
+  ]
+}

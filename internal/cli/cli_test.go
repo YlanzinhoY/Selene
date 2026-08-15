@@ -38,3 +38,28 @@ func TestDoctorJSON(t *testing.T) {
 		t.Fatalf("doctor output is not a report: %q", stdout.String())
 	}
 }
+
+func TestCatalogJSON(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"catalog", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(catalog --json) code = %d; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"revision": "2026-08-15-v2.8"`) {
+		t.Fatalf("catalog output does not contain pinned revision: %q", stdout.String())
+	}
+}
+
+func TestPlanJSON(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"plan", "--json", "luatools"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(plan --json) code = %d; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"ready": false`) {
+		t.Fatalf("plan should report current blockers: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"phase": "download"`) {
+		t.Fatalf("plan does not contain download operations: %q", stdout.String())
+	}
+}

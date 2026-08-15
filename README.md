@@ -4,7 +4,7 @@
 
 Selene é um projeto comunitário e independente, escrito em Go, para facilitar o uso do ecossistema LuaTools no Linux. A proposta é reunir instalação, diagnóstico, atualização e rollback em uma experiência segura para quem joga pela Steam — inclusive com Proton.
 
-O projeto está em fase inicial. A versão atual possui uma TUI e um diagnóstico **somente leitura** de plataforma, Steam, bibliotecas e Proton. Ela ainda não instala o LuaTools.
+O projeto está em fase inicial. A versão atual possui uma TUI, diagnóstico de plataforma/Steam/Proton e um planejador baseado em artefatos reais fixados por SHA-256. Tudo ainda é **somente leitura**: o Selene não instala o LuaTools nesta etapa.
 
 ## Objetivos
 
@@ -29,8 +29,14 @@ O diagnóstico também pode ser executado diretamente:
 ```bash
 selene doctor
 selene doctor --json
+selene catalog
+selene catalog --json
+selene plan
+selene plan --json luatools
 selene version
 ```
+
+O catálogo está em [`internal/catalog/manifests/stable.json`](internal/catalog/manifests/stable.json). Ele fixa as releases `v2.8` atuais de slsteam-moon, Lumen e LuaTools Moon, incluindo URL HTTPS, tamanho e SHA-256 de cada pacote. Consulte [`docs/CATALOG.md`](docs/CATALOG.md) antes de atualizá-lo.
 
 ## Desenvolvimento
 
@@ -69,7 +75,9 @@ Remove-Item Env:GOARCH
 ```text
 cmd/selene/       executável
 internal/cli/     comandos não interativos
+internal/catalog/ catálogo embutido e validação dos manifestos
 internal/doctor/  diagnóstico somente leitura
+internal/planner/ plano de instalação auditável
 internal/ui/      interface Charm
 internal/version/ informações de build
 docs/             decisões e documentação técnica
@@ -87,8 +95,9 @@ Relate vulnerabilidades de forma responsável seguindo o arquivo [SECURITY.md](S
 - [x] TUI com a stack Charm;
 - [x] `selene doctor` e saída JSON;
 - [x] detecção inicial de Steam nativa, Flatpak e Proton;
+- [x] catálogo estável com artefatos reais e SHA-256;
+- [x] `selene plan` com operações, destinos e bloqueios;
 - [ ] testes reais no CachyOS;
-- [ ] manifesto versionado dos componentes;
 - [ ] download com SHA-256 e assinatura;
 - [ ] instalação transacional;
 - [ ] backup, rollback e desinstalação;
