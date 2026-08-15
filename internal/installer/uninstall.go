@@ -84,7 +84,7 @@ func Uninstall(ctx context.Context, source catalog.Catalog, env planner.Environm
 	}
 	defer lock.release()
 
-	fmt.Fprintln(options.Output, "Selene: baixando e verificando o desinstalador fixado...")
+	fmt.Fprintln(options.Output, "Selene: downloading and verifying the pinned uninstaller...")
 	cacheDir := filepath.Join(env.XDGCacheHome, "selene", "downloads")
 	downloaded, err := options.Fetcher.Fetch(ctx, slsteam, cacheDir)
 	if err != nil {
@@ -95,7 +95,7 @@ func Uninstall(ctx context.Context, source catalog.Catalog, env planner.Environm
 	if err != nil {
 		return UninstallResult{}, err
 	}
-	fmt.Fprintln(options.Output, "Selene: criando snapshot de segurança antes da remoção...")
+	fmt.Fprintln(options.Output, "Selene: creating a safety snapshot before removal...")
 	tx, err := transaction.Begin(filepath.Join(env.XDGStateHome, "selene"), "uninstall luatools "+source.Revision, targets, patterns)
 	if err != nil {
 		return UninstallResult{}, err
@@ -112,7 +112,7 @@ func Uninstall(ctx context.Context, source catalog.Catalog, env planner.Environm
 		Env:       controlledEnvironment(env),
 		Output:    options.Output,
 	}
-	fmt.Fprintln(options.Output, "Selene: restaurando os lançadores da Steam com o desinstalador verificado...")
+	fmt.Fprintln(options.Output, "Selene: restoring Steam launchers with the verified uninstaller...")
 	if err := options.Runner.Run(ctx, command); err != nil {
 		return UninstallResult{}, abortUninstall(tx, env, options.Output, fmt.Errorf("slsteam-moon uninstall failed: %w", err))
 	}
@@ -121,7 +121,7 @@ func Uninstall(ctx context.Context, source catalog.Catalog, env planner.Environm
 	defer cancel()
 	stopGuardian(cleanupContext, env)
 	stopLumen(cleanupContext, env)
-	fmt.Fprintln(options.Output, "Selene: removendo Lumen, LuaTools e os resíduos da integração do usuário...")
+	fmt.Fprintln(options.Output, "Selene: removing Lumen, LuaTools, and user integration files...")
 	if err := removeUserStack(env); err != nil {
 		return UninstallResult{}, abortUninstall(tx, env, options.Output, err)
 	}
@@ -399,11 +399,19 @@ func abortUninstall(tx *transaction.Transaction, env planner.Environment, output
 	_ = tx.MarkFailed(cause)
 	cleanupContext, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	nativeLauncher, launcherErr := nativeSteamLauncher(env)
+	_ = stopSteam(cleanupContext, env)
 	stopGuardian(cleanupContext, env)
 	if rollbackErr := tx.Rollback(); rollbackErr != nil {
 		return fmt.Errorf("%w; removal rollback also failed: %v; journal: %s", cause, rollbackErr, filepath.Join(tx.Journal.Root, "journal.json"))
 	}
 	restoreGuardian(cleanupContext, env)
-	fmt.Fprintf(output, "Selene: remoção cancelada; instalação restaurada pela transação %s.\n", tx.Journal.ID)
+	if launcherErr == nil {
+		launcherErr = startSteamAfterRollback(env, nativeLauncher)
+	}
+	fmt.Fprintf(output, "Selene: removal canceled; installed state restored by transaction %s.\n", tx.Journal.ID)
+	if launcherErr != nil {
+		return fmt.Errorf("%w; installed state restored by transaction %s, but Steam restart failed: %v", cause, tx.Journal.ID, launcherErr)
+	}
 	return fmt.Errorf("%w; installed state restored by transaction %s", cause, tx.Journal.ID)
 }

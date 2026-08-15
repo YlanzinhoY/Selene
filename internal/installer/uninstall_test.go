@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/selene-linux/selene/internal/catalog"
 	"github.com/selene-linux/selene/internal/planner"
@@ -139,6 +140,7 @@ func TestUninstallCommitsCompleteRemoval(t *testing.T) {
 func TestUninstallFailureRestoresInstalledStack(t *testing.T) {
 	requireLinuxUserTest(t)
 	env := testEnvironment(t.TempDir())
+	restarted := writeFakeSteamLauncher(t, env)
 	installed := filepath.Join(stackDataHome(env), "SLSsteam", "SLSsteam.so")
 	writeInstallerFile(t, installed, "installed")
 	source := cachedUninstallCatalog(t, env)
@@ -154,6 +156,7 @@ func TestUninstallFailureRestoresInstalledStack(t *testing.T) {
 		t.Fatalf("Uninstall() error = %v", err)
 	}
 	assertInstallerContent(t, installed, "installed")
+	waitForInstallerFile(t, restarted)
 }
 
 func cachedUninstallCatalog(t *testing.T, env planner.Environment) catalog.Catalog {
@@ -210,4 +213,27 @@ func containsEnvironment(values []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+func writeFakeSteamLauncher(t *testing.T, env planner.Environment) string {
+	t.Helper()
+	marker := filepath.Join(env.Home, "steam-restarted")
+	launcher := filepath.Join(env.Home, ".local", "share", "Steam", "steam.sh")
+	writeInstallerFile(t, launcher, "#!/bin/sh\nprintf restarted > \"$HOME/steam-restarted\"\n")
+	if err := os.Chmod(launcher, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return marker
+}
+
+func waitForInstallerFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
 }

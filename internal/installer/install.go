@@ -87,7 +87,7 @@ func Install(ctx context.Context, source catalog.Catalog, bundleID string, env p
 	}
 	defer lock.release()
 
-	fmt.Fprintln(options.Output, "Selene: baixando e verificando os artefatos...")
+	fmt.Fprintln(options.Output, "Selene: downloading and verifying artifacts...")
 	cacheDir := filepath.Join(env.XDGCacheHome, "selene", "downloads")
 	artifacts := make(map[string]artifact.Result, len(components))
 	for _, component := range components {
@@ -102,7 +102,7 @@ func Install(ctx context.Context, source catalog.Catalog, bundleID string, env p
 	if err != nil {
 		return Result{}, err
 	}
-	fmt.Fprintln(options.Output, "Selene: criando snapshot para rollback...")
+	fmt.Fprintln(options.Output, "Selene: creating a rollback snapshot...")
 	tx, err := transaction.Begin(filepath.Join(env.XDGStateHome, "selene"), "install "+bundleID+" "+source.Revision, targets, patterns)
 	if err != nil {
 		return Result{}, err
@@ -138,7 +138,7 @@ func Install(ctx context.Context, source catalog.Catalog, bundleID string, env p
 		Env:       controlledEnvironment(env),
 		Output:    options.Output,
 	}
-	fmt.Fprintln(options.Output, "Selene: executando o setup.sh verificado em modo somente usuário...")
+	fmt.Fprintln(options.Output, "Selene: running the verified setup.sh in user-only mode...")
 	if err := options.Runner.Run(ctx, command); err != nil {
 		return Result{}, abortTransaction(tx, &command, env, options, fmt.Errorf("slsteam-moon setup failed: %w", err))
 	}
@@ -274,17 +274,26 @@ func abortTransaction(tx *transaction.Transaction, installCommand *ScriptCommand
 	_ = tx.MarkFailed(cause)
 	cleanupContext, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	nativeLauncher, launcherErr := nativeSteamLauncher(env)
 	if installCommand != nil {
-		fmt.Fprintln(options.Output, "Selene: a instalação falhou; chamando o uninstaller verificado...")
+		fmt.Fprintln(options.Output, "Selene: installation failed; running the verified uninstaller...")
 		uninstall := *installCommand
 		uninstall.Arguments = []string{"uninstall"}
 		_ = options.Runner.Run(cleanupContext, uninstall)
 	}
+	_ = stopSteam(cleanupContext, env)
 	stopGuardian(cleanupContext, env)
 	if rollbackErr := tx.Rollback(); rollbackErr != nil {
 		return fmt.Errorf("%w; rollback also failed: %v; journal: %s", cause, rollbackErr, filepath.Join(tx.Journal.Root, "journal.json"))
 	}
 	restoreGuardian(cleanupContext, env)
+	if launcherErr == nil {
+		if restartErr := startSteamAfterRollback(env, nativeLauncher); restartErr != nil {
+			return fmt.Errorf("%w; previous state restored by transaction %s, but Steam restart failed: %v", cause, tx.Journal.ID, restartErr)
+		}
+	} else {
+		return fmt.Errorf("%w; previous state restored by transaction %s, but Steam restart failed: %v", cause, tx.Journal.ID, launcherErr)
+	}
 	return fmt.Errorf("%w; previous state restored by transaction %s", cause, tx.Journal.ID)
 }
 

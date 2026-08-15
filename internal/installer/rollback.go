@@ -53,8 +53,12 @@ func Rollback(ctx context.Context, env planner.Environment, id string, output io
 	if !installation && !unfinishedRemoval {
 		return RollbackResult{}, errors.New("the selected journal is not a recoverable Selene transaction")
 	}
+	nativeLauncher, err := nativeSteamLauncher(env)
+	if err != nil {
+		return RollbackResult{}, err
+	}
 
-	fmt.Fprintf(output, "Selene: restaurando o snapshot %s...\n", tx.Journal.ID)
+	fmt.Fprintf(output, "Selene: stopping Steam before rollback %s...\n", tx.Journal.ID)
 	select {
 	case <-ctx.Done():
 		return RollbackResult{}, ctx.Err()
@@ -64,11 +68,19 @@ func Rollback(ctx context.Context, env planner.Environment, id string, output io
 	// Ctrl-C; interrupting a rollback can leave launchers half-restored.
 	cleanupContext, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	if err := stopSteam(cleanupContext, env); err != nil {
+		return RollbackResult{}, err
+	}
 	stopGuardian(cleanupContext, env)
+	fmt.Fprintf(output, "Selene: restoring snapshot %s...\n", tx.Journal.ID)
 	if err := tx.Rollback(); err != nil {
 		return RollbackResult{}, fmt.Errorf("rollback %s failed: %w; journal: %s", tx.Journal.ID, err, filepath.Join(tx.Journal.Root, "journal.json"))
 	}
 	restoreGuardian(cleanupContext, env)
+	fmt.Fprintln(output, "Selene: restarting Steam with the restored integration...")
+	if err := startSteamAfterRollback(env, nativeLauncher); err != nil {
+		return RollbackResult{}, fmt.Errorf("rollback %s completed, but Steam could not be restarted: %w", tx.Journal.ID, err)
+	}
 	return RollbackResult{
 		TransactionID: tx.Journal.ID,
 		Description:   tx.Journal.Description,

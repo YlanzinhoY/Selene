@@ -1,6 +1,10 @@
 package installer
 
 import (
+	"bytes"
+	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,6 +46,58 @@ func TestSelectTransactionUsesNewestRestorableInstall(t *testing.T) {
 	if selected.Journal.ID != old.Journal.ID {
 		t.Fatalf("selected %s after rollback, want %s", selected.Journal.ID, old.Journal.ID)
 	}
+}
+
+func TestAutomaticInstallRollbackRestartsSteam(t *testing.T) {
+	requireLinuxUserTest(t)
+	root := t.TempDir()
+	env := testEnvironment(root)
+	restarted := writeFakeSteamLauncher(t, env)
+	tracked := filepath.Join(env.Home, "automatic.txt")
+	writeInstallerFile(t, tracked, "before")
+	tx, err := transaction.Begin(filepath.Join(env.XDGStateHome, "selene"), "install luatools automatic-test", []transaction.Target{{Path: tracked}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tracked, []byte("after"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = abortTransaction(tx, nil, env, Options{Output: io.Discard}, errors.New("simulated install failure"))
+	if err == nil || !strings.Contains(err.Error(), "previous state restored") {
+		t.Fatalf("abortTransaction() error = %v", err)
+	}
+	assertInstallerContent(t, tracked, "before")
+	waitForInstallerFile(t, restarted)
+}
+
+func TestRollbackRestartsSteam(t *testing.T) {
+	requireLinuxUserTest(t)
+	root := t.TempDir()
+	env := testEnvironment(root)
+	restarted := writeFakeSteamLauncher(t, env)
+	tracked := filepath.Join(env.Home, "tracked.txt")
+	writeInstallerFile(t, tracked, "before")
+	stateRoot := filepath.Join(env.XDGStateHome, "selene")
+	tx, err := transaction.Begin(stateRoot, "install luatools restart-test", []transaction.Target{{Path: tracked}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tracked, []byte("after"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	result, err := Rollback(t.Context(), env, tx.Journal.ID, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TransactionID != tx.Journal.ID || !strings.Contains(output.String(), "restarting Steam") {
+		t.Fatalf("Rollback() = %#v, output=%q", result, output.String())
+	}
+	assertInstallerContent(t, tracked, "before")
+	waitForInstallerFile(t, restarted)
 }
 
 func TestSuccessfulUninstallBlocksOlderAutomaticRollback(t *testing.T) {
