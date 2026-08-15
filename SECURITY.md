@@ -1,10 +1,10 @@
 # Security
 
-Selene is pre-release software. Installation, rollback, and complete removal modify Steam integration inside the current user's account. Artifact downloads write only to Selene's cache until the user confirms installation.
+Selene is early-stage software. Installation, rollback, and complete removal modify Steam integration inside the current user's account. Artifact downloads write only to Selene's cache until the user confirms installation.
 
 ## Reporting a vulnerability
 
-Do not publicly disclose exploitable details before a fix is available. Contact the maintainer through the private channel that will be published with the first release.
+Do not publicly disclose exploitable details before a fix is available. Use GitHub private vulnerability reporting when it is available. Otherwise, open an issue requesting a private contact channel without including exploit details.
 
 Include:
 

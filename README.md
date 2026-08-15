@@ -2,271 +2,109 @@
 
 > There are truths that only the light of the moon can reveal.
 
-Selene is an independent community project written in Go. It provides a friendly terminal interface for installing, checking, rolling back, and completely removing the LuaTools stack on Linux, including systems where games run through Proton.
+Selene is a friendly terminal application for installing, checking, rolling back, and completely removing the LuaTools stack on Linux. It is written in Go for people who use native Steam, including games running through Proton.
 
-Selene v0.0.2 has a Charm-based TUI, Steam and Proton checks, a SHA-256-pinned artifact catalog, transactional installation, persistent snapshots, automatic recovery, and complete user-only removal. Real hardware validation on CachyOS is still in progress.
+Created by [YlanzinhoY](https://github.com/YlanzinhoY) as an independent community project.
 
-## Goals
+## Why Selene
 
-- Keep the normal experience entirely inside the TUI.
-- Avoid administrative privileges whenever possible.
-- Explain every change before applying it.
-- Verify every download with a pinned size and SHA-256 digest.
-- Snapshot affected files before mutation.
-- Restore the previous state and restart Steam after rollback.
-- Remove the full LuaTools/Lumen/slsteam-moon integration without touching games.
+- A TUI built with Bubble Tea, Lip Gloss, and Bubbles.
+- Pinned LuaTools, Lumen, and slsteam-moon artifacts verified with SHA-256.
+- Clear installation details before anything changes.
+- User-only installation without `sudo`.
+- Persistent snapshots and automatic recovery on failure.
+- Rollback that restores the previous state and restarts Steam.
+- Complete LuaTools removal without deleting Steam or games.
 
-## Requirements
+## Compatibility
+
+Selene v0.0.2 currently requires:
 
 - Linux `x86_64/amd64`.
-- Native Steam, not Flatpak Steam yet.
-- Steam must have been opened once so its first update can finish.
-- A regular desktop user session; never run Selene with `sudo`.
-- Internet access for artifacts that are not already cached.
+- Native Steam opened at least once.
+- A regular desktop user session.
+- Internet access for artifacts not already cached.
 
-Wine and Proton do not block Selene. Selene integrates with the native Linux Steam client, while each game continues using the Proton version selected in Steam.
+Wine and Proton do not block Selene. Each game continues using the compatibility tool selected in Steam. Flatpak Steam can be detected, but it is not an installation target yet.
 
-## 1. Install Selene
+Never run Selene with `sudo`.
 
-After a GitHub Release publishes the binary and checksum, download and inspect the bootstrap before running it:
+## Install v0.0.2
+
+Download and inspect the bootstrap before running it:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
   https://raw.githubusercontent.com/YlanzinhoY/Selene/main/install.sh \
   -o /tmp/selene-install.sh
+
 less /tmp/selene-install.sh
 sh /tmp/selene-install.sh --version v0.0.2
 ```
 
-The bootstrap installs only `~/.local/bin/selene`, without `sudo`. It verifies the published checksum, runs an internal version self-test, and atomically activates the binary.
+Press `q` to close `less`. The bootstrap verifies the release checksum and atomically installs only `~/.local/bin/selene`.
 
-Pinning the version keeps installation reproducible and avoids depending on GitHub's `latest` release redirect. To preview the same installation without changing files:
-
-```bash
-sh /tmp/selene-install.sh --dry-run --version v0.0.2
-```
-
-The release must contain:
-
-```text
-selene-linux-amd64
-selene-linux-amd64.sha256
-```
-
-To build v0.0.2 from source on CachyOS instead:
-
-```bash
-sudo pacman -S --needed go git
-git clone https://github.com/YlanzinhoY/Selene.git
-cd Selene
-go test ./...
-go build -trimpath -o selene ./cmd/selene
-install -Dm755 selene "$HOME/.local/bin/selene"
-```
-
-Only the `pacman` command needs `sudo`. Build and run Selene as your regular user.
-
-If the shell reports `selene: command not found`, run:
+If `selene` is not found after installation:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 selene
 ```
 
-Add that export to `~/.bashrc` or `~/.zshrc` if you want it to persist.
+See the [user guide](docs/USER_GUIDE.md) for a dry run, detailed usage, paths, and troubleshooting.
 
-## 2. Use Selene
+## Use
 
-Selene is TUI-only. Start it without arguments:
+Start the TUI without arguments:
 
 ```bash
 selene
 ```
 
-Use `↑`/`↓` to navigate, `Enter` to select, `Esc` to go back, and `q` to quit. During installation, rollback, or removal, normal exit is blocked until the transaction reaches a safe state.
+Use `↑`/`↓` to navigate, `Enter` to select, `Esc` to go back, and `q` to quit.
 
-The home screen contains:
-
-- **Check compatibility:** checks Linux, native/Flatpak Steam, Steam libraries, Proton, and the desktop session without changing files.
-- **Installation details:** shows every download, checksum, destination, snapshot, and activation step before installation.
-- **Download and verify:** prepares the verified artifacts in Selene's cache without installing anything.
-- **Install LuaTools:** displays a final confirmation, creates a snapshot, and installs the pinned stack.
-- **Undo last installation:** stops Steam, restores the exact previous snapshot, restores services, and starts Steam again.
-- **Remove LuaTools completely:** removes LuaTools, Lumen, slsteam-moon, settings, services, and user-level Steam integration.
-- **About Selene:** shows the project's mission and current state.
-- **Exit:** closes the interface.
-
-Recommended first run:
+A good first run is:
 
 1. Open **Check compatibility**.
-2. Resolve anything marked as an error.
-3. Review **Installation details**.
-4. Optionally use **Download and verify**.
-5. Select **Install LuaTools** and read the confirmation.
-6. Open Steam after installation succeeds.
+2. Review **Installation details**.
+3. Select **Install LuaTools** and read the confirmation.
+4. Open Steam after installation succeeds.
 
-Operational CLI commands are intentionally unavailable. `--version` exists only for release diagnostics and the bootstrap self-test.
+Use **Undo last installation** to restore the exact previous snapshot. Use **Remove LuaTools completely** when you want to remove the full LuaTools, Lumen, and slsteam-moon user integration. Neither action deletes games.
 
-## 3. Rollback versus complete removal
+## Safety
 
-These actions have different meanings:
+Selene does not execute the mutable LuaTools installer from `main`. It downloads exact release artifacts over HTTPS, verifies their expected size and SHA-256 digest, inspects archives, and stages files privately.
 
-- **Undo last installation** restores exactly what existed before a Selene installation. If Lumen or slsteam-moon already existed at that point, they are preserved. Every successful rollback restarts Steam so the restored launch configuration takes effect immediately.
-- **Remove LuaTools completely** aims for a clean native Steam launch. It removes the full LuaTools, Lumen, and slsteam-moon user stack, including plugin data, SLSsteam settings, shell entries, desktop integration, and user services.
+Every mutation starts with a snapshot. Failed installation or removal triggers recovery, and Steam is restarted after rollback so the restored configuration takes effect.
 
-Complete removal does not delete games, Steam libraries, Steam itself, the Selene binary, Selene's download cache, or safety snapshots.
+Read [Security](SECURITY.md) and [Transactions and rollback](docs/TRANSACTIONS.md) for the full trust and recovery model.
 
-Removal uses `setup.sh uninstall` from the same pinned slsteam-moon ZIP verified by SHA-256. Selene creates a new safety snapshot before starting. If removal fails, it restores the installed stack and restarts Steam automatically.
+## Documentation
 
-After successful complete removal, Selene does not allow an older rollback to cross that boundary and reactivate the removed stack. An interrupted removal remains recoverable from **Undo last installation**, where it appears as **Recover interrupted removal**.
-
-## 4. First CachyOS test
-
-CachyOS recommends **CachyOS Hello → Apps/Tweaks → Install Gaming packages**. The equivalent packages are:
-
-```bash
-sudo pacman -S cachyos-gaming-meta cachyos-gaming-applications
-```
-
-The applications package includes Steam. Run Selene later as your regular user, without `sudo`. See the [CachyOS gaming guide](https://wiki.cachyos.org/configuration/gaming/) and [ArchWiki Steam documentation](https://wiki.archlinux.org/title/Steam).
-
-Test checklist:
-
-1. Update CachyOS and install its gaming packages.
-2. Open native Steam, sign in, and let its first update finish.
-3. Close Steam.
-4. Install or build Selene.
-5. Open **Check compatibility** and confirm native Steam is detected.
-6. Open **Installation details** and confirm the runtime destination is `~/.local/share`.
-7. Install LuaTools from the TUI.
-8. Open Steam and confirm Lumen/LuaTools loads.
-9. Use **Undo last installation** and confirm Steam closes and starts again automatically.
-10. Install again, then use **Remove LuaTools completely**.
-11. Confirm `~/.local/share/SLSsteam`, `~/.local/share/Lumen`, and `slsteam-desktop-guardian.*` units are gone.
-12. Confirm native Steam opens normally and games remain untouched.
-
-When reporting a test, include the CachyOS edition, desktop environment, GPU/driver, compatibility screen results, transaction ID, and visible log. Remove usernames, tokens, and personal data first.
-
-## 5. Files and directories
-
-| Content | Default path |
+| Guide | Purpose |
 |---|---|
-| Selene executable | `~/.local/bin/selene` |
-| Download cache | `~/.cache/selene/downloads` |
-| Journals and snapshots | `~/.local/state/selene/transactions` |
-| slsteam-moon | `~/.local/share/SLSsteam` |
-| Lumen and LuaTools | `~/.local/share/Lumen` |
-| SLSsteam settings | `~/.config/SLSsteam` |
-
-XDG variables are respected for cache, configuration, state, desktop entries, and services. SLSsteam and Lumen remain in `~/.local/share` because the upstream wrapper resolves those paths directly.
-
-## 6. Common problems
-
-### Native Steam is not initialized
-
-Open Steam from the desktop, wait for its initial update to finish, close it, and run **Check compatibility** again.
-
-### Only Flatpak Steam is detected
-
-The first Selene adapter does not install into Flatpak Steam. Use the native Steam package on CachyOS for now.
-
-### A transaction was interrupted
-
-Open **Undo last installation**. Selene finds the newest recoverable install or interrupted removal snapshot.
-
-### Steam cannot be restarted after rollback
-
-Selene looks for `/usr/bin/steam`, `/usr/games/steam`, `/usr/local/bin/steam`, and native Steam bootstrap launchers under your home directory. Reinstall or open native Steam once if none exists, then retry the rollback.
-
-### Remove only the Selene executable
-
-Use **Remove LuaTools completely** first if you also want to clean the Steam integration. Then remove `~/.local/bin/selene`. Removing only the executable does not remove LuaTools or snapshots.
-
-## 7. Editing interface text
-
-The main TUI copy is intentionally centralized:
-
-- `internal/ui/text.go`: menu names, descriptions, activity messages, buttons, page headings, confirmations, and explanatory paragraphs.
-- `internal/doctor/doctor.go`: compatibility-check results.
-- `internal/planner/planner.go`: operations shown under **Installation details**.
-- `internal/catalog/manifests/stable.json`: bundle and component names/descriptions.
-- `README.md`: this user guide.
-
-After editing text, run `gofmt -w internal` for Go files and `go test ./...`.
+| [User guide](docs/USER_GUIDE.md) | Installation, TUI actions, rollback, removal, and troubleshooting |
+| [CachyOS testing](docs/CACHYOS_TESTING.md) | Hardware validation checklist and report format |
+| [Transactions](docs/TRANSACTIONS.md) | Snapshots, journals, rollback, and recovery boundaries |
+| [Architecture](docs/ARCHITECTURE.md) | Components and trust boundaries |
+| [Catalog](docs/CATALOG.md) | Pinned upstream artifacts and manifest maintenance |
+| [Contributing](CONTRIBUTING.md) | Development, interface text, tests, and builds |
+| [Security](SECURITY.md) | Security rules and vulnerability reporting |
 
 ## Development
-
-Requirements:
-
-- Go 1.24 or newer.
-- Git.
-- Linux for real Steam/Proton integration tests.
 
 ```bash
 git clone https://github.com/YlanzinhoY/Selene.git
 cd Selene
-go mod download
 go test ./...
-sh scripts/test-install.sh
 go run ./cmd/selene
 ```
 
-Build for Linux:
+See [CONTRIBUTING.md](CONTRIBUTING.md) before changing code, copy, catalogs, or release artifacts.
 
-```bash
-go build -trimpath -o bin/selene ./cmd/selene
-```
+## Project status
 
-Cross-compile from Windows PowerShell:
+The transactional native-Steam workflow is implemented. Real CachyOS hardware validation is still in progress. Native Flatpak Steam support, signed releases, snapshot retention, and AUR packaging remain on the roadmap.
 
-```powershell
-$env:GOOS = "linux"
-$env:GOARCH = "amd64"
-go build -trimpath -o bin/selene-linux-amd64 ./cmd/selene
-Remove-Item Env:GOOS
-Remove-Item Env:GOARCH
-```
-
-## Project structure
-
-```text
-cmd/selene/          executable
-internal/cli/        TUI-only entrypoint and internal version flag
-internal/artifact/   download, SHA-256, and safe archive inspection
-internal/catalog/    embedded catalog and manifest validation
-internal/doctor/     read-only compatibility checks
-internal/planner/    auditable installation details
-internal/installer/  user-only install, rollback, removal, and Steam restart
-internal/transaction snapshot, journal, and restore engine
-internal/ui/         Charm interface and editable copy
-internal/version/    build metadata
-docs/                technical decisions
-```
-
-## Security
-
-Selene never executes the mutable LuaTools `install.sh` from `main`. It downloads exact release artifacts over HTTPS, verifies size and SHA-256, inspects archives, extracts into private staging, blocks inherited injection variables, and executes pinned slsteam-moon setup logic without sudo.
-
-Every mutation begins after its affected paths have been snapshotted. See [docs/TRANSACTIONS.md](docs/TRANSACTIONS.md) and [SECURITY.md](SECURITY.md).
-
-## Roadmap
-
-- [x] Charm TUI.
-- [x] Linux, Steam, and Proton compatibility checks.
-- [x] Pinned real artifacts and SHA-256 verification.
-- [x] Transactional user-only installation.
-- [x] Persistent manual and automatic rollback.
-- [x] Automatic Steam restart after rollback.
-- [x] Transactional complete removal.
-- [x] TUI-only operational interface.
-- [ ] Real CachyOS hardware validation.
-- [ ] Signed catalog and releases.
-- [ ] Native Flatpak Steam support.
-- [ ] Snapshot retention policy.
-- [ ] Automated GitHub releases and AUR packaging.
-
-## Independence
-
-Selene is not affiliated with Valve, Steam, LuaTools, or the authors of integrated components. Each upstream project retains its own authorship and license.
-
-Before wider distribution, the maintainer should finalize the module path, authorship, and Selene license.
+Selene is not affiliated with Valve, Steam, LuaTools, or the authors of the integrated components. Each upstream project retains its own authorship and license.
