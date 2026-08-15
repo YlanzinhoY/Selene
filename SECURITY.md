@@ -1,6 +1,6 @@
 # Segurança
 
-O Selene está em estágio inicial. `install --yes` modifica a integração da Steam no escopo do usuário; `fetch` escreve somente no cache.
+O Selene está em estágio inicial. `install --yes` e `uninstall --yes` modificam a integração da Steam no escopo do usuário; `fetch` escreve somente no cache.
 
 ## Relatando uma vulnerabilidade
 
@@ -35,6 +35,8 @@ O adaptador atual executa o `setup.sh` presente no ZIP fixado do slsteam-moon. E
 - define `SLSM_IMMUTABLE=1` e `SLSM_SUDO_DENIED=1` para impedir alterações de sistema e prompts administrativos.
 
 Snapshots podem conter cópias de configurações do próprio usuário. Eles ficam sob `XDG_STATE_HOME/selene/transactions` em diretórios privados e ainda não possuem expiração automática.
+
+Na remoção completa, o Selene baixa ou reutiliza do cache o mesmo artefato fixado, executa apenas seu comando `uninstall` sem sudo e cria antes um snapshot do estado instalado. Depois, remove os runtimes e resíduos conhecidos no escopo do usuário e recusa considerar a operação concluída se ainda encontrar a tag de desktop ou o wrapper SLSsteam. Jogos e arquivos internos da Steam não fazem parte do escopo de remoção.
 
 ## Artefatos
 

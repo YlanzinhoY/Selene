@@ -2,7 +2,7 @@
 
 > LuaTools no Linux, sem rituais de terminal.
 
-Selene é um projeto comunitário e independente, escrito em Go, para facilitar o uso do ecossistema LuaTools no Linux. A proposta é reunir instalação, diagnóstico, atualização e rollback em uma experiência segura para quem joga pela Steam — inclusive com Proton.
+Selene é um projeto comunitário e independente, escrito em Go, para facilitar o uso do ecossistema LuaTools no Linux. A proposta é reunir instalação, diagnóstico, atualização, rollback e remoção completa em uma experiência segura para quem joga pela Steam — inclusive com Proton.
 
 O projeto está em fase inicial. A versão atual possui TUI, diagnóstico de plataforma/Steam/Proton, catálogo fixado por SHA-256 e instalação transacional do stack LuaTools. A integração real ainda precisa ser validada em uma máquina CachyOS antes da primeira release pública.
 
@@ -83,22 +83,23 @@ Execute sem argumentos para abrir a TUI construída com [Bubble Tea](https://git
 selene
 ```
 
-Use as setas `↑`/`↓` para navegar, `Enter` para selecionar, `Esc` para voltar e `q` para sair. Durante uma instalação ou rollback a saída fica bloqueada até a transação terminar com segurança.
+Use as setas `↑`/`↓` para navegar, `Enter` para selecionar, `Esc` para voltar e `q` para sair. Durante uma instalação, rollback ou remoção a saída fica bloqueada até a transação terminar com segurança.
 
 As opções da TUI são:
 
 - **Diagnosticar ambiente:** verifica Linux, Steam, bibliotecas e Proton sem alterar arquivos.
-- **Planejar instalação:** mostra downloads, hashes, destinos e riscos.
+- **Detalhes da instalação:** mostra o que será baixado e alterado antes de instalar.
 - **Baixar e verificar:** deixa os pacotes prontos no cache, mas não instala nada.
 - **Instalar LuaTools:** apresenta uma segunda tela de confirmação, cria o snapshot e instala.
-- **Desfazer instalação:** restaura a transação recuperável mais recente.
+- **Desfazer última instalação:** restaura exatamente o snapshot anterior à instalação escolhida.
+- **Remover LuaTools completamente:** remove LuaTools, Lumen, slsteam-moon, configurações e integração da Steam no usuário.
 - **Sobre o Selene:** mostra a missão e o estado do projeto.
 
 Fluxo recomendado na primeira vez:
 
 1. Abra **Diagnosticar ambiente**.
 2. Corrija qualquer item marcado como erro.
-3. Abra **Planejar instalação** e revise os destinos.
+3. Abra **Detalhes da instalação** e revise os destinos.
 4. Use **Baixar e verificar** se quiser preparar o cache antecipadamente.
 5. Selecione **Instalar LuaTools** e leia a confirmação.
 6. Depois do sucesso, abra a Steam normalmente.
@@ -124,6 +125,9 @@ Tudo que existe na TUI também pode ser usado diretamente no terminal:
 | `selene history --json` | Lista os journals completos em JSON. | Não |
 | `selene rollback --yes` | Restaura a transação recuperável mais recente. | Sim |
 | `selene rollback --yes ID` | Restaura uma transação específica. | Sim |
+| `selene uninstall` | Mostra todos os vestígios detectados e como confirmar a remoção completa. | Não |
+| `selene uninstall --yes` | Remove LuaTools, Lumen, slsteam-moon e a integração no usuário. | Sim |
+| `selene uninstall --yes --json` | Executa a remoção e emite o resultado em JSON. | Sim |
 | `selene version` | Mostra versão, commit e data do build. | Não |
 | `selene help` | Mostra a ajuda resumida. | Não |
 
@@ -157,6 +161,19 @@ selene rollback --yes 20260815T120000Z-exemplo
 
 O rollback para o guardian, restaura arquivos, diretórios, atalhos, configurações e links de ativação do systemd. Ele não baixa nada e não reexecuta scripts guardados no snapshot.
 
+### Diferença entre desfazer e remover completamente
+
+Essas opções têm objetivos diferentes:
+
+- `selene rollback --yes` volta ao estado que existia antes de uma instalação do Selene. Se Lumen ou slsteam-moon já estavam instalados naquele momento, eles são preservados porque faziam parte do estado anterior.
+- `selene uninstall --yes` busca deixar a Steam sem a integração LuaTools. Ele remove LuaTools, todo o Lumen, slsteam-moon, configuração SLSsteam, serviços, entradas de shell e resíduos conhecidos no escopo do usuário.
+
+A remoção completa apaga também os dados internos do plugin. Ela não apaga jogos, bibliotecas da Steam, a própria Steam, o executável do Selene, o cache de downloads ou os snapshots. Antes de remover, o Selene cria uma nova transação; se a restauração dos lançadores ou qualquer validação falhar, a instalação atual é recuperada automaticamente.
+
+Depois que a remoção termina com sucesso, o Selene não permite que um rollback antigo atravesse esse marco e reative o stack removido. Uma remoção interrompida, porém, aparece como recuperação pendente e pode ser restaurada com `selene rollback --yes`.
+
+O desinstalador usado nessa operação é o `setup.sh uninstall` do mesmo ZIP fixado no catálogo e validado por SHA-256. Por isso, a primeira remoção precisa de internet se o artefato ainda não estiver no cache.
+
 ## 4. Primeiro teste no CachyOS
 
 No CachyOS, a forma recomendada pelo próprio projeto é abrir **CachyOS Hello → Apps/Tweaks → Install Gaming packages**. Pelo terminal, os metapacotes correspondentes são:
@@ -178,7 +195,9 @@ Checklist para o teste:
 7. Abra `selene` para testar a TUI ou rode `selene install --yes`.
 8. Guarde o ID da transação mostrado no final.
 9. Abra a Steam normalmente e verifique se Lumen/LuaTools carregaram.
-10. Se algo der errado, feche a Steam e rode `selene rollback --yes`.
+10. Para testar o retorno ao estado anterior, feche a Steam e rode `selene rollback --yes`.
+11. Instale novamente e teste **Remover LuaTools completamente** ou `selene uninstall --yes`.
+12. Confirme que `~/.local/share/SLSsteam`, `~/.local/share/Lumen` e as units `slsteam-desktop-guardian.*` não existem mais e que a Steam abre normalmente.
 
 Para relatar o primeiro teste, anote a edição do CachyOS, ambiente gráfico, GPU/driver, saída de `selene doctor`, ID da transação e o log exibido. Remova nomes de usuário, tokens ou outros dados pessoais antes de publicar.
 
@@ -215,7 +234,7 @@ Rode `selene history`. Uma transação `active` ou `failed` pode ser recuperada 
 
 ### Quero remover apenas o executável do Selene
 
-Primeiro faça rollback do LuaTools se também quiser desfazer a integração. Depois, remova `~/.local/bin/selene`. Apagar somente o executável não remove LuaTools, Lumen nem os snapshots.
+Primeiro rode `selene uninstall --yes` se quiser remover toda a integração LuaTools. Depois, remova `~/.local/bin/selene`. Apagar somente o executável não remove LuaTools, Lumen nem os snapshots.
 
 O catálogo está em [`internal/catalog/manifests/stable.json`](internal/catalog/manifests/stable.json). Ele fixa as releases `v2.8` atuais de slsteam-moon, Lumen e LuaTools Moon, incluindo URL HTTPS, tamanho e SHA-256 de cada pacote. Consulte [`docs/CATALOG.md`](docs/CATALOG.md) antes de atualizá-lo.
 
@@ -272,7 +291,7 @@ docs/             decisões e documentação técnica
 
 Selene não executa `curl | bash` nem busca um instalador mutável em `main`. O downloader usa HTTPS, confere tamanho e SHA-256 durante o streaming e inspeciona os ZIPs antes de aceitá-los. O `setup.sh` executado vem de uma release fixada do slsteam-moon, é extraído em staging privado e roda com `SLSM_IMMUTABLE=1`, `SLSM_SUDO_DENIED=1` e variáveis de injeção removidas.
 
-Antes de executar esse setup, o Selene salva os caminhos afetados. Falhas acionam o uninstaller verificado, param os serviços criados e restauram o snapshot. Um commit bem-sucedido mantém os dados de rollback em `XDG_STATE_HOME/selene/transactions`. Consulte [docs/TRANSACTIONS.md](docs/TRANSACTIONS.md).
+Antes de executar esse setup, o Selene salva os caminhos afetados. Falhas acionam o uninstaller verificado, param os serviços criados e restauram o snapshot. A remoção completa também abre sua própria transação antes de chamar o `setup.sh uninstall` verificado e limpar o stack do usuário. Um commit bem-sucedido mantém os dados de recuperação em `XDG_STATE_HOME/selene/transactions`. Consulte [docs/TRANSACTIONS.md](docs/TRANSACTIONS.md).
 
 Relate vulnerabilidades de forma responsável seguindo o arquivo [SECURITY.md](SECURITY.md).
 
@@ -289,6 +308,7 @@ Relate vulnerabilidades de forma responsável seguindo o arquivo [SECURITY.md](S
 - [ ] assinatura do catálogo e das releases;
 - [x] instalação user-only transacional;
 - [x] backup, journal e rollback manual/automático;
+- [x] remoção completa transacional de LuaTools, Lumen e slsteam-moon;
 - [x] integração fixada com LuaTools Moon, slsteam-moon e Lumen;
 - [ ] suporte à Steam Flatpak;
 - [ ] política de retenção/limpeza de snapshots;
