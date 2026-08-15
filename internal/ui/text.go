@@ -93,9 +93,10 @@ const (
 	textSafetyTransactionLabel = "Safety transaction: "
 	textNothingRemoved         = "No managed installation was found; nothing changed."
 
-	textAboutTitle = "About Selene"
-	textAboutBody  = "Selene is an independent community manager that makes the\nLuaTools ecosystem accessible on Linux. Its priority is to install,\ncheck, update, undo, and remove changes safely."
-	textAboutState = "Current state: transactional user-only install, rollback, and complete removal."
+	textAboutTitle  = "About Selene"
+	textAboutBody   = "Selene is an independent community manager that makes the\nLuaTools ecosystem accessible on Linux. Its priority is to install,\ncheck, update, undo, and remove changes safely."
+	textAboutState  = "Current state: transactional user-only install, rollback, and complete removal."
+	textAboutAuthor = "Created by YlanzinhoY."
 )
 
 var textHomeMenu = []menuItem{

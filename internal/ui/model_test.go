@@ -83,3 +83,10 @@ func TestHomeMenuHasBreathingRoomBetweenItems(t *testing.T) {
 		t.Fatalf("home menu does not show the selected description: %q", content)
 	}
 }
+
+func TestAboutCreditsCreator(t *testing.T) {
+	content := aboutView()
+	if !strings.Contains(content, "Created by YlanzinhoY") {
+		t.Fatalf("about screen does not credit the creator: %q", content)
+	}
+}

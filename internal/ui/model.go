@@ -804,7 +804,7 @@ func compactHash(value string) string {
 }
 
 func aboutView() string {
-	return titleStyle.Render(textAboutTitle) + "\n\n" + textAboutBody + "\n\n" + mutedStyle.Render(textAboutState)
+	return titleStyle.Render(textAboutTitle) + "\n\n" + textAboutBody + "\n\n" + mutedStyle.Render(textAboutState) + "\n\n" + titleStyle.Render(textAboutAuthor)
 }
 
 func runDoctor() tea.Cmd {
