@@ -59,6 +59,34 @@ func TestRollbackRestoresFilesDirectoriesAndPatterns(t *testing.T) {
 	}
 }
 
+func TestRollbackRemovesNewPatternDirectoryAndRestoresExistingOne(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	parent := filepath.Join(root, "data")
+	existing := filepath.Join(parent, ".selene-stage-old")
+	writeTestFile(t, filepath.Join(existing, "value"), "before")
+	tx, err := Begin(state, "test", nil, []Pattern{{
+		Glob:      filepath.Join(parent, ".selene-stage-*"),
+		Recursive: true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(existing); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(existing, "value"), "changed")
+	created := filepath.Join(parent, ".selene-stage-new")
+	writeTestFile(t, filepath.Join(created, "value"), "new")
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	assertTestContent(t, filepath.Join(existing, "value"), "before")
+	if _, err := os.Stat(created); !os.IsNotExist(err) {
+		t.Fatalf("new pattern directory still exists, err=%v", err)
+	}
+}
+
 func TestCommitPersistsAndCanBeLoaded(t *testing.T) {
 	root := t.TempDir()
 	state := filepath.Join(root, "state")
@@ -77,6 +105,35 @@ func TestCommitPersistsAndCanBeLoaded(t *testing.T) {
 	}
 	if loaded.Journal.State != StateCommitted || loaded.Journal.ID != tx.Journal.ID {
 		t.Fatalf("loaded journal = %#v", loaded.Journal)
+	}
+}
+
+func TestListReturnsNewestFirstAndOpenRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	first, err := Begin(state, "first", []Target{{Path: filepath.Join(root, "one")}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Begin(state, "second", []Target{{Path: filepath.Join(root, "two")}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	journals, err := List(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journals) != 2 || journals[0].ID != second.Journal.ID {
+		t.Fatalf("List() = %#v", journals)
+	}
+	if _, err := Open(state, "../escape"); err == nil {
+		t.Fatal("Open() accepted a traversal id")
 	}
 }
 

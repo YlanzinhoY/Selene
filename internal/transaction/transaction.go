@@ -35,7 +35,8 @@ type Target struct {
 // Pattern tracks a narrow group of files. Files created after Begin are removed
 // during rollback, while pre-existing matches are restored through Entries.
 type Pattern struct {
-	Glob string
+	Glob      string
+	Recursive bool
 }
 
 type Entry struct {
@@ -51,6 +52,7 @@ type Entry struct {
 type PatternSnapshot struct {
 	Glob          string   `json:"glob"`
 	OriginalPaths []string `json:"original_paths"`
+	Recursive     bool     `json:"recursive,omitempty"`
 }
 
 type Journal struct {
@@ -121,7 +123,7 @@ func Begin(stateRoot, description string, targets []Target, patterns []Pattern) 
 			if seen[match] {
 				continue
 			}
-			entry, err := tx.snapshot(Target{Path: match}, len(tx.Journal.Entries))
+			entry, err := tx.snapshot(Target{Path: match, Recursive: snapshot.Recursive}, len(tx.Journal.Entries))
 			if err != nil {
 				tx.discardIncomplete()
 				return nil, err
@@ -221,7 +223,91 @@ func Load(journalPath string) (*Transaction, error) {
 	if filepath.Clean(journalPath) != filepath.Clean(expected) {
 		return nil, errors.New("journal path does not match transaction root")
 	}
+	if err := validateLoadedJournal(journal); err != nil {
+		return nil, err
+	}
 	return &Transaction{Journal: journal}, nil
+}
+
+// Open loads one transaction by ID from a Selene state root.
+func Open(stateRoot, id string) (*Transaction, error) {
+	if !filepath.IsAbs(stateRoot) {
+		return nil, errors.New("transaction state root must be absolute")
+	}
+	if id == "" || id == "." || id == ".." || filepath.Base(id) != id || strings.ContainsAny(id, `/\\`) {
+		return nil, errors.New("invalid transaction id")
+	}
+	root := filepath.Join(filepath.Clean(stateRoot), "transactions", id)
+	tx, err := Load(filepath.Join(root, "journal.json"))
+	if err != nil {
+		return nil, err
+	}
+	if filepath.Clean(tx.Journal.Root) != filepath.Clean(root) || tx.Journal.ID != id {
+		return nil, errors.New("transaction identity does not match its state directory")
+	}
+	return tx, nil
+}
+
+// List returns valid journals newest first.
+func List(stateRoot string) ([]Journal, error) {
+	if !filepath.IsAbs(stateRoot) {
+		return nil, errors.New("transaction state root must be absolute")
+	}
+	directory := filepath.Join(filepath.Clean(stateRoot), "transactions")
+	entries, err := os.ReadDir(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list transactions: %w", err)
+	}
+	result := make([]Journal, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		tx, err := Open(stateRoot, entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("load transaction %s: %w", entry.Name(), err)
+		}
+		result = append(result, tx.Journal)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+	return result, nil
+}
+
+func validateLoadedJournal(journal Journal) error {
+	if !slices.Contains([]State{StateActive, StateCommitted, StateRollingBack, StateRolledBack, StateFailed}, journal.State) {
+		return fmt.Errorf("invalid transaction state %q", journal.State)
+	}
+	for _, entry := range journal.Entries {
+		if err := validateTrackedPath(entry.Path); err != nil {
+			return fmt.Errorf("invalid transaction entry: %w", err)
+		}
+		if !entry.Existed {
+			continue
+		}
+		if !slices.Contains([]string{"file", "directory", "symlink"}, entry.Kind) || entry.Backup == "" {
+			return fmt.Errorf("invalid backup metadata for %s", entry.Path)
+		}
+		backup := filepath.Join(journal.Root, filepath.FromSlash(entry.Backup))
+		if err := ensureWithin(journal.Root, backup); err != nil {
+			return fmt.Errorf("invalid backup path for %s", entry.Path)
+		}
+	}
+	for _, pattern := range journal.Patterns {
+		if _, _, err := normalizePattern(Pattern{Glob: pattern.Glob, Recursive: pattern.Recursive}); err != nil {
+			return fmt.Errorf("invalid transaction pattern: %w", err)
+		}
+		for _, original := range pattern.OriginalPaths {
+			if err := validateTrackedPath(original); err != nil {
+				return fmt.Errorf("invalid original pattern path: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 func (tx *Transaction) snapshot(target Target, index int) (Entry, error) {
@@ -382,7 +468,7 @@ func normalizePattern(pattern Pattern) (PatternSnapshot, []string, error) {
 		}
 	}
 	sort.Strings(matches)
-	return PatternSnapshot{Glob: cleaned, OriginalPaths: append([]string(nil), matches...)}, matches, nil
+	return PatternSnapshot{Glob: cleaned, OriginalPaths: append([]string(nil), matches...), Recursive: pattern.Recursive}, matches, nil
 }
 
 func validateTrackedPath(path string) error {
