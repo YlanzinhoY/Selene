@@ -16,6 +16,16 @@ Created by [YlanzinhoY](https://github.com/YlanzinhoY) as an independent communi
 - Rollback that restores the previous state and restarts Steam.
 - Complete LuaTools removal without deleting Steam or games.
 
+## Goals
+
+- Keep the normal experience entirely inside the TUI.
+- Avoid administrative privileges whenever possible.
+- Explain every change before applying it.
+- Verify every download with a pinned size and SHA-256 digest.
+- Snapshot affected files before mutation.
+- Restore the previous state and restart Steam after rollback.
+- Remove the full LuaTools, Lumen, and slsteam-moon integration without touching games.
+
 ## Compatibility
 
 Selene v0.0.2 currently requires:
