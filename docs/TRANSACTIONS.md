@@ -1,6 +1,6 @@
-# Transações e rollback
+# Transactions and rollback
 
-Cada instalação e cada remoção completa abre uma transação antes de executar o primeiro processo upstream. O journal e os backups ficam em:
+Every installation and complete removal opens a transaction before the first upstream mutation. Journals and backups live at:
 
 ```text
 ${XDG_STATE_HOME:-$HOME/.local/state}/selene/transactions/<id>/
@@ -9,42 +9,33 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/selene/transactions/<id>/
 └── stage/
 ```
 
-O snapshot cobre:
+The snapshot covers:
 
-- `~/.local/share/SLSsteam` e `~/.local/share/Lumen`;
-- configuração e estado do slsteam-moon;
-- `.bashrc`, `.zshrc` e `.profile`;
-- entradas Steam do menu, autostart e Desktop, além do cache de associações regenerado no escopo do usuário;
-- units, drop-ins e links de ativação do guardian no systemd do usuário;
-- diretórios temporários usados na troca atômica do Lumen.
+- `~/.local/share/SLSsteam` and `~/.local/share/Lumen`;
+- slsteam-moon settings and state;
+- `.bashrc`, `.zshrc`, and `.profile`;
+- Steam menu, autostart, and Desktop entries plus the user association cache;
+- guardian units, drop-ins, and systemd activation links;
+- temporary directories used for atomic Lumen activation.
 
-Arquivos que já existiam são copiados com seu tipo e permissões. Caminhos ausentes ficam registrados para serem removidos caso a instalação os crie. Globs estreitos registram a lista original, permitindo apagar atalhos novos e restaurar os anteriores.
+Existing files are copied with their type and permissions. Missing paths are recorded so anything created later can be removed. Narrow glob snapshots preserve original matches and remove newly created entries.
 
-## Estados
+## States
 
-- `active`: snapshot concluído e instalação em andamento;
-- `committed`: instalação validada; backup mantido para rollback manual;
-- `rolling_back`: restauração em andamento;
-- `rolled_back`: estado anterior restaurado;
-- `failed`: erro registrado; o rollback pode ser repetido.
+- `active`: snapshot complete and mutation in progress;
+- `committed`: operation validated and recovery data retained;
+- `rolling_back`: restoration in progress;
+- `rolled_back`: previous state restored;
+- `failed`: error recorded and restoration may be retried.
 
-Uma falha durante a instalação chama o uninstaller do mesmo staging verificado, para o guardian e restaura o snapshot. Um rollback manual não executa scripts guardados: ele para diretamente os serviços conhecidos e restaura os dados do journal.
+Installation failure calls the verified uninstaller from the same staging directory, stops known services, restores the snapshot, and restarts Steam. Manual rollback never executes a script retained inside a snapshot; it stops Steam and services directly, restores journal data, reloads systemd, and starts Steam with the restored integration.
 
-A remoção completa cria uma transação `uninstall` separada, baixa ou reutiliza do cache o slsteam-moon fixado, chama seu `setup.sh uninstall` e valida que o stack do usuário não deixou wrapper, tag de desktop, unit ou diretório de runtime. Se qualquer etapa falhar, essa transação restaura a instalação que existia antes da tentativa de remoção.
+Complete removal creates a separate `uninstall` transaction, downloads or reuses the pinned slsteam-moon artifact, calls `setup.sh uninstall`, and validates that no wrapper, desktop tag, unit, or runtime remains. Failure restores the installed state and restarts Steam.
 
-```bash
-selene history
-selene rollback --yes                 # transação recuperável mais recente
-selene rollback --yes <transaction-id>
-selene uninstall --yes
-```
+Rollback normally selects installation journals. An interrupted removal is also recoverable so power loss cannot leave half-removed integration. After successful complete removal, rollback cannot cross that boundary and reactivate an older stack.
 
-Em condições normais, `rollback` seleciona journals de instalação: seu significado é voltar ao estado anterior. Um journal de remoção interrompida também é recuperável para que uma queda de energia não deixe a integração pela metade. Depois de uma remoção completa concluída, o rollback não atravessa esse marco para reativar uma instalação antiga, nem mesmo quando um ID anterior é informado. `uninstall` tem significado diferente e remove o stack completo, mesmo quando Lumen ou slsteam-moon já existiam antes da instalação mais recente do Selene.
+## Interruptions
 
-Depois de restaurar units anteriores, o Selene recarrega o systemd do usuário e reinicia apenas os timers/paths cujos links de ativação existiam no snapshot.
+Downloads happen before snapshots and can be canceled safely. Once mutation begins, the TUI blocks normal exit until commit or automatic rollback. After a power loss or forced exit, open **Undo last installation** to recover the newest active or failed transaction.
 
-## Interrupções
-
-Downloads podem ser cancelados sem rollback porque ocorrem antes do snapshot. Depois que a mutação começa, a TUI bloqueia a saída normal até commit ou rollback automático. Se houver queda de energia ou encerramento forçado durante uma instalação ou remoção, a transação permanece `active` e pode ser recuperada com `selene rollback --yes`.
-
-Os snapshots ainda não são removidos automaticamente. Essa retenção favorece recuperação no MVP, mas pode consumir espaço proporcional à instalação anterior.
+Snapshots are not automatically pruned yet. This favors recovery during the MVP but may consume space proportional to previous installations.

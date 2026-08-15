@@ -1,57 +1,57 @@
-# Segurança
+# Security
 
-O Selene está em estágio inicial. `install --yes` e `uninstall --yes` modificam a integração da Steam no escopo do usuário; `fetch` escreve somente no cache.
+Selene is pre-release software. Installation, rollback, and complete removal modify Steam integration inside the current user's account. Artifact downloads write only to Selene's cache until the user confirms installation.
 
-## Relatando uma vulnerabilidade
+## Reporting a vulnerability
 
-Não abra publicamente detalhes que permitam exploração antes de uma correção. Entre em contato diretamente com o mantenedor pelo canal privado que será publicado junto da primeira release.
+Do not publicly disclose exploitable details before a fix is available. Contact the maintainer through the private channel that will be published with the first release.
 
-Inclua no relato:
+Include:
 
-- versão ou commit afetado;
-- distribuição Linux e arquitetura;
-- Steam nativa ou Flatpak;
-- passos mínimos para reproduzir;
-- impacto observado;
-- logs sem tokens, credenciais ou dados pessoais.
+- affected version or commit;
+- Linux distribution and architecture;
+- native or Flatpak Steam;
+- minimal reproduction steps;
+- observed impact;
+- logs with tokens, credentials, usernames, and personal data removed.
 
-## Regras da instalação
+## Installation rules
 
-- downloads devem usar HTTPS e validação criptográfica;
-- arquivos nunca devem ser extraídos fora do destino esperado;
-- alterações precisam ser declaradas antes da confirmação;
-- operações devem preferir o escopo do usuário;
-- backups devem existir antes de qualquer substituição;
-- falhas devem acionar rollback quando possível;
-- nenhuma credencial da Steam deve ser lida ou armazenada.
+- Downloads must use HTTPS and cryptographic integrity checks.
+- Archives must never escape their staging destination.
+- Changes must be disclosed before confirmation.
+- Mutations must remain in user scope.
+- Backups must exist before replacement.
+- Failures must trigger rollback whenever possible.
+- Successful rollback must restart Steam.
+- Selene must never read or store Steam credentials.
 
-O adaptador atual executa o `setup.sh` presente no ZIP fixado do slsteam-moon. Ele nunca executa o `install.sh` da branch `main`. Antes da execução, o Selene:
+The current adapter runs `setup.sh` from the pinned slsteam-moon ZIP. It never executes the mutable LuaTools installer from the `main` branch. Before execution, Selene:
 
-- confere tamanho e SHA-256 do artefato;
-- rejeita ZIP inseguro e extrai em um staging privado;
-- cria um snapshot persistente de todos os destinos conhecidos;
-- recusa root e exige Steam nativa inicializada;
-- remove variáveis `LD_*` herdadas;
-- define `SLSM_IMMUTABLE=1` e `SLSM_SUDO_DENIED=1` para impedir alterações de sistema e prompts administrativos.
+- verifies artifact size and SHA-256;
+- rejects unsafe ZIP files and extracts into private staging;
+- creates a persistent snapshot of every known destination;
+- rejects root and requires initialized native Steam;
+- removes inherited `LD_*` injection variables;
+- sets `SLSM_IMMUTABLE=1` and `SLSM_SUDO_DENIED=1` to block system changes and administrative prompts.
 
-Snapshots podem conter cópias de configurações do próprio usuário. Eles ficam sob `XDG_STATE_HOME/selene/transactions` em diretórios privados e ainda não possuem expiração automática.
+Snapshots may contain copies of user settings. They are stored in private directories under `XDG_STATE_HOME/selene/transactions` and do not expire automatically yet.
 
-Na remoção completa, o Selene baixa ou reutiliza do cache o mesmo artefato fixado, executa apenas seu comando `uninstall` sem sudo e cria antes um snapshot do estado instalado. Depois, remove os runtimes e resíduos conhecidos no escopo do usuário e recusa considerar a operação concluída se ainda encontrar a tag de desktop ou o wrapper SLSsteam. Jogos e arquivos internos da Steam não fazem parte do escopo de remoção.
+Complete removal reuses the same pinned artifact, runs only its `uninstall` action without sudo, and creates a snapshot of the installed state first. Selene refuses to commit removal while a managed desktop tag, wrapper, runtime, or service remains. Games and Steam library files are outside the removal scope.
 
-## Artefatos
+## Artifact downloader
 
-O downloader atual:
+The downloader:
 
-- aceita somente URLs HTTPS de um catálogo embutido e validado;
-- limita redirecionamentos e recusa downgrade para HTTP;
-- confere o tamanho declarado;
-- calcula SHA-256 enquanto recebe o arquivo;
-- grava primeiro em arquivo temporário com permissão restrita;
-- rejeita ZIPs com path traversal, links, entradas criptografadas, duplicatas ou expansão excessiva;
-- confirma os arquivos obrigatórios antes de ativar o cache.
+- accepts only HTTPS URLs from the embedded validated catalog;
+- limits redirects and rejects HTTP downgrade;
+- verifies declared size and SHA-256;
+- writes into a restricted temporary file first;
+- rejects path traversal, links, encrypted entries, duplicates, and excessive expansion;
+- confirms required files before activating cache content.
 
-## Bootstrap do Selene
+## Selene bootstrap
 
-O `install.sh` da raiz instala somente o executável do Selene no escopo do usuário. Ele aceita apenas Linux `amd64`, recusa root, usa HTTPS inclusive nos redirecionamentos, exige o asset `.sha256`, executa `selene version` como autoteste e ativa o arquivo por rename no mesmo diretório.
+The root `install.sh` installs only the Selene executable for the current user. It accepts Linux `amd64`, rejects root, enforces HTTPS redirects, requires the `.sha256` asset, runs `selene --version` as a self-test, and atomically replaces the destination.
 
-O checksum publicado na mesma GitHub Release detecta corrupção ou troca isolada do binário, mas não substitui assinatura criptográfica e não protege contra comprometimento da conta/release. Assinatura dos artefatos permanece no roadmap. Recomenda-se baixar e revisar o bootstrap antes de executá-lo, como demonstrado no README.
+A checksum protects against corruption or isolated binary replacement, but it is not a signature and cannot protect against a compromised release account. Signed releases remain on the roadmap.

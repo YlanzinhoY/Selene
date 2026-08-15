@@ -1,32 +1,35 @@
-# Arquitetura
+# Architecture
 
-O Selene separa a experiência interativa da lógica de sistema. Isso permite usar o mesmo núcleo pela TUI, pela CLI, por testes e, futuramente, por uma interface gráfica.
+Selene separates the terminal experience from system logic so the same core can be exercised by the TUI and tests.
 
 ```text
-CLI / TUI
-   │
-   ├── doctor (somente leitura)
-   ├── catalog (manifestos embutidos e validados)
-   ├── planner (plano somente leitura)
-   ├── artifact (download, integridade e inspeção de ZIP)
-   ├── installer (instalação e remoção user-only)
-   │      ├── setup.sh fixado do slsteam-moon
-   │      ├── ativação atômica de Lumen/LuaTools
-   │      └── setup.sh uninstall fixado + limpeza validada
-   └── transaction
-          ├── snapshot anterior à mutação
-          ├── journal persistente
-          └── rollback manual ou automático
+TUI
+ │
+ ├── doctor      read-only compatibility checks
+ ├── catalog     embedded validated manifests
+ ├── planner     read-only installation details
+ ├── artifact    download, integrity, and ZIP inspection
+ ├── installer   user-only install and complete removal
+ │    ├── pinned slsteam-moon setup.sh
+ │    ├── atomic Lumen/LuaTools activation
+ │    ├── pinned setup.sh uninstall + residue validation
+ │    └── Steam stop/restart around rollback
+ └── transaction
+      ├── pre-mutation snapshot
+      ├── persistent journal
+      └── manual or automatic restore
 ```
 
-## Limites atuais
+The executable intentionally exposes no operational CLI commands. Running `selene` opens the TUI. The internal `--version` flag exists only for release diagnostics and bootstrap validation.
 
-A instalação real está limitada a Linux `amd64`, Steam nativa já inicializada e escopo do usuário. Steam Flatpak, Game Mode e integrações que exijam mudanças em `/usr` estão fora do primeiro adaptador.
+## Current boundaries
 
-## Fronteira de confiança
+Real installation is limited to Linux `amd64`, initialized native Steam, and the current user's account. Flatpak Steam, Game Mode-specific integration, and `/usr` changes are outside the first adapter.
 
-O Selene controla aquisição, hash, inspeção, staging, ambiente do processo, snapshot, rollback e validação da remoção. O slsteam-moon continua sendo responsável pela sua lógica de wrapper `LD_AUDIT`, atalhos e guardian; instalação e restauração de lançadores são executadas a partir do `setup.sh` contido no artefato exato do catálogo.
+## Trust boundary
 
-O executor não baixa nem executa o `install.sh` vivo. Ele bloqueia `sudo`, força o modo imutável/user-only do upstream, remove `LD_AUDIT`, `LD_PRELOAD` e `LD_LIBRARY_PATH` herdados e valida os arquivos essenciais antes de commitar a transação.
+Selene controls acquisition, hashing, archive inspection, staging, process environment, snapshots, rollback, removal validation, and Steam restart. slsteam-moon remains responsible for its `LD_AUDIT` wrapper, desktop entries, and guardian logic. Selene executes that logic only from the exact catalog artifact.
 
-O journal fica fora da árvore instalada. Assim, uma instalação interrompida continua recuperável com `selene rollback --yes`, e uma remoção que falhe pode recuperar automaticamente o stack instalado.
+The executor never downloads or runs a live installer from `main`. It blocks sudo, forces upstream immutable/user-only mode, removes inherited `LD_AUDIT`, `LD_PRELOAD`, and `LD_LIBRARY_PATH`, and validates essential files before committing.
+
+Journals live outside the installed tree. Interrupted installation or removal remains recoverable from the TUI.
