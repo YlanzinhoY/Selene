@@ -30,7 +30,7 @@ Usage:
   sh install.sh [options]
 
 Options:
-  --version TAG       Install a specific release, for example v0.1.0
+  --version TAG       Install a specific release, for example v0.0.2
   --repo OWNER/REPO   GitHub repository (default: YlanzinhoY/Selene)
   --install-dir DIR   Destination (default: ~/.local/bin)
   --dry-run           Show URLs and destination without changing files

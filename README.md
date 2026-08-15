@@ -4,7 +4,7 @@
 
 Selene is an independent community project written in Go. It provides a friendly terminal interface for installing, checking, rolling back, and completely removing the LuaTools stack on Linux, including systems where games run through Proton.
 
-The project is still pre-release. The current build has a Charm-based TUI, Steam and Proton checks, a SHA-256-pinned artifact catalog, transactional installation, persistent snapshots, automatic recovery, and complete user-only removal. Real hardware validation on CachyOS is still required before the first public release.
+Selene v0.0.2 has a Charm-based TUI, Steam and Proton checks, a SHA-256-pinned artifact catalog, transactional installation, persistent snapshots, automatic recovery, and complete user-only removal. Real hardware validation on CachyOS is still in progress.
 
 ## Goals
 
@@ -35,16 +35,15 @@ curl --proto '=https' --tlsv1.2 -fL \
   https://raw.githubusercontent.com/YlanzinhoY/Selene/main/install.sh \
   -o /tmp/selene-install.sh
 less /tmp/selene-install.sh
-sh /tmp/selene-install.sh
+sh /tmp/selene-install.sh --version v0.0.2
 ```
 
 The bootstrap installs only `~/.local/bin/selene`, without `sudo`. It verifies the published checksum, runs an internal version self-test, and atomically activates the binary.
 
-For a specific release or a dry run:
+Pinning the version keeps installation reproducible and avoids depending on GitHub's `latest` release redirect. To preview the same installation without changing files:
 
 ```bash
-sh install.sh --version v0.1.0
-sh install.sh --dry-run --version v0.1.0
+sh /tmp/selene-install.sh --dry-run --version v0.0.2
 ```
 
 The release must contain:
@@ -54,7 +53,7 @@ selene-linux-amd64
 selene-linux-amd64.sha256
 ```
 
-There is no public tag yet. To test the current source on CachyOS:
+To build v0.0.2 from source on CachyOS instead:
 
 ```bash
 sudo pacman -S --needed go git
@@ -264,10 +263,10 @@ Every mutation begins after its affected paths have been snapshotted. See [docs/
 - [ ] Signed catalog and releases.
 - [ ] Native Flatpak Steam support.
 - [ ] Snapshot retention policy.
-- [ ] GitHub Release and AUR packaging.
+- [ ] Automated GitHub releases and AUR packaging.
 
 ## Independence
 
 Selene is not affiliated with Valve, Steam, LuaTools, or the authors of integrated components. Each upstream project retains its own authorship and license.
 
-Before the first public release, the maintainer should finalize the module path, authorship, and Selene license.
+Before wider distribution, the maintainer should finalize the module path, authorship, and Selene license.
