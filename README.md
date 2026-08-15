@@ -4,7 +4,7 @@
 
 Selene é um projeto comunitário e independente, escrito em Go, para facilitar o uso do ecossistema LuaTools no Linux. A proposta é reunir instalação, diagnóstico, atualização e rollback em uma experiência segura para quem joga pela Steam — inclusive com Proton.
 
-O projeto está em fase inicial. A versão atual possui uma TUI, diagnóstico de plataforma/Steam/Proton e um planejador baseado em artefatos reais fixados por SHA-256. Tudo ainda é **somente leitura**: o Selene não instala o LuaTools nesta etapa.
+O projeto está em fase inicial. A versão atual possui uma TUI, diagnóstico de plataforma/Steam/Proton, planejador e cache de artefatos reais fixados por SHA-256. O Selene ainda não instala o LuaTools nem altera a Steam; a única escrita disponível é o download explícito para o cache do próprio usuário.
 
 ## Objetivos
 
@@ -33,6 +33,8 @@ selene catalog
 selene catalog --json
 selene plan
 selene plan --json luatools
+selene fetch
+selene fetch --json luatools
 selene version
 ```
 
@@ -75,6 +77,7 @@ Remove-Item Env:GOARCH
 ```text
 cmd/selene/       executável
 internal/cli/     comandos não interativos
+internal/artifact/ download, SHA-256 e inspeção segura dos pacotes
 internal/catalog/ catálogo embutido e validação dos manifestos
 internal/doctor/  diagnóstico somente leitura
 internal/planner/ plano de instalação auditável
@@ -85,7 +88,7 @@ docs/             decisões e documentação técnica
 
 ## Segurança
 
-Selene não executará scripts remotos com `curl | bash`. A instalação futura deverá usar downloads verificados, diretórios temporários protegidos, transações, backups e rollback automático.
+Selene não executará scripts remotos com `curl | bash`. O downloader usa HTTPS, confere tamanho e SHA-256 durante o streaming e inspeciona os ZIPs antes de aceitá-los no cache. A instalação futura deverá usar diretórios temporários protegidos, transações, backups e rollback automático.
 
 Relate vulnerabilidades de forma responsável seguindo o arquivo [SECURITY.md](SECURITY.md).
 
@@ -97,8 +100,9 @@ Relate vulnerabilidades de forma responsável seguindo o arquivo [SECURITY.md](S
 - [x] detecção inicial de Steam nativa, Flatpak e Proton;
 - [x] catálogo estável com artefatos reais e SHA-256;
 - [x] `selene plan` com operações, destinos e bloqueios;
+- [x] cache com download verificado e inspeção segura de ZIP;
 - [ ] testes reais no CachyOS;
-- [ ] download com SHA-256 e assinatura;
+- [ ] assinatura do catálogo e das releases;
 - [ ] instalação transacional;
 - [ ] backup, rollback e desinstalação;
 - [ ] integração com LuaTools Moon, slsteam-moon e Lumen;

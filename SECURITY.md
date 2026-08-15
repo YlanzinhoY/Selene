@@ -1,6 +1,6 @@
 # Segurança
 
-O Selene ainda está em estágio inicial e não realiza instalação nem modifica a Steam.
+O Selene ainda está em estágio inicial e não realiza instalação nem modifica a Steam. O comando `fetch` escreve somente no cache do usuário.
 
 ## Relatando uma vulnerabilidade
 
@@ -24,3 +24,15 @@ Inclua no relato:
 - backups devem existir antes de qualquer substituição;
 - falhas devem acionar rollback quando possível;
 - nenhuma credencial da Steam deve ser lida ou armazenada.
+
+## Artefatos
+
+O downloader atual:
+
+- aceita somente URLs HTTPS de um catálogo embutido e validado;
+- limita redirecionamentos e recusa downgrade para HTTP;
+- confere o tamanho declarado;
+- calcula SHA-256 enquanto recebe o arquivo;
+- grava primeiro em arquivo temporário com permissão restrita;
+- rejeita ZIPs com path traversal, links, entradas criptografadas, duplicatas ou expansão excessiva;
+- confirma os arquivos obrigatórios antes de ativar o cache.

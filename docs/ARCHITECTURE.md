@@ -8,7 +8,7 @@ CLI / TUI
    ├── doctor (somente leitura)
    ├── catalog (manifestos embutidos e validados)
    ├── planner (plano somente leitura)
-   ├── downloader (planejado)
+   ├── artifact (download, integridade e inspeção de ZIP)
    └── transaction (planejado)
           ├── backup
           ├── apply
@@ -17,7 +17,7 @@ CLI / TUI
 
 ## Limites atuais
 
-A versão atual implementa diagnóstico, catálogo e planejamento. Nenhum caminho detectado é modificado.
+A versão atual implementa diagnóstico, catálogo, planejamento e cache verificado. Nenhum caminho da Steam ou da instalação é modificado.
 
 ## Próximo limite arquitetural
 

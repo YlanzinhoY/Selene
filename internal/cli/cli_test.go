@@ -63,3 +63,14 @@ func TestPlanJSON(t *testing.T) {
 		t.Fatalf("plan does not contain download operations: %q", stdout.String())
 	}
 }
+
+func TestFetchRejectsUnknownBundleBeforeNetwork(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"fetch", "missing"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("Run(fetch missing) code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "não encontrado") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}

@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -10,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/selene-linux/selene/internal/artifact"
 	"github.com/selene-linux/selene/internal/catalog"
 	"github.com/selene-linux/selene/internal/doctor"
 	"github.com/selene-linux/selene/internal/planner"
@@ -21,6 +23,7 @@ const (
 	screenHome screen = iota
 	screenDoctor
 	screenPlan
+	screenFetch
 	screenAbout
 )
 
@@ -33,6 +36,11 @@ type planMsg struct {
 	err  error
 }
 
+type fetchMsg struct {
+	results []artifact.Result
+	err     error
+}
+
 type menuItem struct {
 	title       string
 	description string
@@ -43,12 +51,15 @@ type model struct {
 	height   int
 	cursor   int
 	screen   screen
+	ctx      context.Context
+	cancel   context.CancelFunc
 	checking bool
 	activity string
 	spinner  spinner.Model
 	viewport viewport.Model
 	report   *doctor.Report
 	plan     *planner.Plan
+	fetched  []artifact.Result
 	err      error
 	items    []menuItem
 }
@@ -68,21 +79,27 @@ var (
 
 // Run starts the terminal interface.
 func Run() error {
-	p := tea.NewProgram(newModel(), tea.WithAltScreen())
+	m := newModel()
+	defer m.cancel()
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }
 
 func newModel() model {
+	ctx, cancel := context.WithCancel(context.Background())
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(accentColor)
 	return model{
+		ctx:      ctx,
+		cancel:   cancel,
 		spinner:  s,
 		viewport: viewport.New(80, 15),
 		items: []menuItem{
 			{title: "Diagnosticar ambiente", description: "Verificar Linux, Steam, bibliotecas e Proton"},
 			{title: "Planejar instalação", description: "Revisar hashes e destinos sem alterar arquivos"},
+			{title: "Baixar e verificar", description: "Guardar os pacotes verificados no cache do Selene"},
 			{title: "Sobre o Selene", description: "Conhecer a missão e o estado do projeto"},
 			{title: "Sair", description: "Fechar a interface"},
 		},
@@ -122,9 +139,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenPlan
 		m.refreshViewport()
 		return m, nil
+	case fetchMsg:
+		m.checking = false
+		m.activity = ""
+		m.err = msg.err
+		m.fetched = msg.results
+		m.screen = screenFetch
+		m.refreshViewport()
+		return m, nil
 	case tea.KeyMsg:
 		key := msg.String()
 		if key == "ctrl+c" || key == "q" {
+			m.cancel()
 			return m, tea.Quit
 		}
 		if m.checking {
@@ -153,8 +179,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = "Montando um plano verificável sem aplicar mudanças..."
 					return m, tea.Batch(m.spinner.Tick, buildPlan())
 				case 2:
-					m.screen = screenAbout
+					m.checking = true
+					m.activity = "Baixando, conferindo SHA-256 e inspecionando os pacotes..."
+					return m, tea.Batch(m.spinner.Tick, fetchArtifacts(m.ctx))
 				case 3:
+					m.screen = screenAbout
+				case 4:
 					return m, tea.Quit
 				}
 			}
@@ -180,6 +210,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.checking = true
 				m.activity = "Atualizando o plano sem aplicar mudanças..."
 				return m, tea.Batch(m.spinner.Tick, buildPlan())
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenFetch:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenHome
+				return m, nil
+			case "r":
+				m.checking = true
+				m.activity = "Conferindo novamente os artefatos no cache..."
+				return m, tea.Batch(m.spinner.Tick, fetchArtifacts(m.ctx))
 			}
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -213,6 +256,8 @@ func (m model) View() string {
 			body = m.viewport.View()
 		case screenPlan:
 			body = m.viewport.View()
+		case screenFetch:
+			body = m.viewport.View()
 		case screenAbout:
 			body = aboutView()
 		default:
@@ -225,6 +270,8 @@ func (m model) View() string {
 		footerText = "↑/↓ rolar  •  r verificar  •  esc voltar  •  q sair"
 	} else if m.screen == screenPlan && !m.checking {
 		footerText = "↑/↓ rolar  •  r recalcular  •  esc voltar  •  q sair"
+	} else if m.screen == screenFetch && !m.checking {
+		footerText = "↑/↓ rolar  •  r verificar cache  •  esc voltar  •  q sair"
 	}
 	footer := mutedStyle.Render(footerText)
 	inside := lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer)
@@ -304,6 +351,8 @@ func (m *model) refreshViewport() {
 		}
 	case screenPlan:
 		content = m.planContent()
+	case screenFetch:
+		content = m.fetchContent()
 	default:
 		return
 	}
@@ -352,6 +401,40 @@ func (m model) planContent() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func (m model) fetchContent() string {
+	if m.err != nil {
+		return titleStyle.Render("Artefatos do LuaTools") + "\n\n" + errorStyle().Render("× "+m.err.Error())
+	}
+	if len(m.fetched) == 0 {
+		return "Nenhum artefato verificado."
+	}
+
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Artefatos verificados"))
+	b.WriteString("\n\n")
+	for _, result := range m.fetched {
+		origin := "baixado agora"
+		if result.Cached {
+			origin = "já estava no cache"
+		}
+		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(goodColor).Render("✓ " + result.Component))
+		b.WriteString("  " + mutedStyle.Render(result.Version+" · "+origin) + "\n")
+		name := strings.TrimPrefix(filepath.Base(result.Path), result.SHA256+"-")
+		b.WriteString("  " + name + "\n")
+		b.WriteString("  " + mutedStyle.Render("cache: "+filepath.Dir(result.Path)) + "\n")
+		b.WriteString("  " + mutedStyle.Render("sha256:"+compactHash(result.SHA256)) + "\n\n")
+	}
+	b.WriteString(mutedStyle.Render("Os arquivos estão somente no cache; nada foi instalado."))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func compactHash(value string) string {
+	if len(value) <= 24 {
+		return value
+	}
+	return value[:16] + "…" + value[len(value)-8:]
+}
+
 func aboutView() string {
 	return titleStyle.Render("Sobre o Selene") + "\n\n" +
 		"Selene é um gerenciador comunitário e independente para tornar o\n" +
@@ -378,6 +461,38 @@ func buildPlan() tea.Cmd {
 		}
 		plan, err := planner.Build(source, "luatools", env)
 		return planMsg{plan: plan, err: err}
+	}
+}
+
+func fetchArtifacts(ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		source, err := catalog.LoadStable()
+		if err != nil {
+			return fetchMsg{err: err}
+		}
+		bundle, ok := source.Bundle("luatools")
+		if !ok {
+			return fetchMsg{err: fmt.Errorf("bundle luatools não encontrado")}
+		}
+		components, err := source.OrderedComponents(bundle)
+		if err != nil {
+			return fetchMsg{err: err}
+		}
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return fetchMsg{err: err}
+		}
+		cacheDir := filepath.Join(env.XDGCacheHome, "selene", "downloads")
+		fetcher := artifact.NewFetcher()
+		results := make([]artifact.Result, 0, len(components))
+		for _, component := range components {
+			result, err := fetcher.Fetch(ctx, component, cacheDir)
+			if err != nil {
+				return fetchMsg{results: results, err: err}
+			}
+			results = append(results, result)
+		}
+		return fetchMsg{results: results}
 	}
 }
 

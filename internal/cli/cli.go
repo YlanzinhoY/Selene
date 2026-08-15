@@ -6,8 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
 
+	"github.com/selene-linux/selene/internal/artifact"
 	"github.com/selene-linux/selene/internal/catalog"
 	"github.com/selene-linux/selene/internal/doctor"
 	"github.com/selene-linux/selene/internal/planner"
@@ -23,6 +27,7 @@ Uso:
   selene doctor --json   Emite o diagnóstico em JSON
   selene catalog         Lista bundles e componentes verificados
   selene plan [bundle]   Mostra todas as alterações sem aplicá-las
+  selene fetch [bundle]  Baixa e verifica artefatos no cache
   selene version         Exibe a versão
   selene help            Exibe esta ajuda
 `
@@ -44,6 +49,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runCatalog(args[1:], stdout, stderr)
 	case "plan":
 		return runPlan(args[1:], stdout, stderr)
+	case "fetch":
+		return runFetch(args[1:], stdout, stderr)
 	case "version", "--version", "-v":
 		fmt.Fprintf(stdout, "selene %s (commit %s, build %s)\n", version.Version, version.Commit, version.Date)
 		return 0
@@ -54,6 +61,77 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "selene: comando desconhecido %q\n\n%s", args[0], usage)
 		return 2
 	}
+}
+
+func runFetch(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("fetch", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	jsonOutput := flags.Bool("json", false, "emite os artefatos verificados em JSON")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() > 1 {
+		fmt.Fprintln(stderr, "selene fetch: informe no máximo um bundle")
+		return 2
+	}
+	bundleID := "luatools"
+	if flags.NArg() == 1 {
+		bundleID = flags.Arg(0)
+	}
+
+	source, err := catalog.LoadStable()
+	if err != nil {
+		fmt.Fprintf(stderr, "selene fetch: %v\n", err)
+		return 1
+	}
+	bundle, ok := source.Bundle(bundleID)
+	if !ok {
+		fmt.Fprintf(stderr, "selene fetch: bundle %q não encontrado\n", bundleID)
+		return 1
+	}
+	components, err := source.OrderedComponents(bundle)
+	if err != nil {
+		fmt.Fprintf(stderr, "selene fetch: %v\n", err)
+		return 1
+	}
+	env, err := planner.DetectEnvironment()
+	if err != nil {
+		fmt.Fprintf(stderr, "selene fetch: %v\n", err)
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	cacheDir := filepath.Join(env.XDGCacheHome, "selene", "downloads")
+	fetcher := artifact.NewFetcher()
+	results := make([]artifact.Result, 0, len(components))
+	for _, component := range components {
+		result, err := fetcher.Fetch(ctx, component, cacheDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "selene fetch: %v\n", err)
+			return 1
+		}
+		results = append(results, result)
+	}
+
+	if *jsonOutput {
+		if err := writeJSON(stdout, results); err != nil {
+			fmt.Fprintf(stderr, "selene fetch: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	fmt.Fprintf(stdout, "Artefatos verificados — %s\n\n", bundle.Name)
+	for _, result := range results {
+		origin := "baixado"
+		if result.Cached {
+			origin = "cache"
+		}
+		fmt.Fprintf(stdout, "[OK] %-18s %-8s %d bytes\n", result.Component, origin, result.Size)
+		fmt.Fprintf(stdout, "     %s\n", result.Path)
+	}
+	fmt.Fprintln(stdout, "\nNenhum artefato foi instalado.")
+	return 0
 }
 
 func runCatalog(args []string, stdout, stderr io.Writer) int {
