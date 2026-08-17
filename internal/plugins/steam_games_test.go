@@ -3,6 +3,7 @@ package plugins
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/selene-linux/selene/internal/planner"
@@ -67,6 +68,7 @@ func TestAnalyzePlatformAssetOverrideFindsUnityAndUnrealSignals(t *testing.T) {
 }
 
 func TestFixPlatformAssetOverrideDisablesUnrealPlugin(t *testing.T) {
+	requireLinuxPluginMutation(t)
 	root := t.TempDir()
 	descriptor := filepath.Join(root, "Plugins", "PlatformAssetOverrides", "PlatformAssetOverrides.uplugin")
 	if err := os.MkdirAll(filepath.Dir(descriptor), 0o700); err != nil {
@@ -96,6 +98,7 @@ func TestFixPlatformAssetOverrideDisablesUnrealPlugin(t *testing.T) {
 }
 
 func TestUndoPlatformAssetOverrideFixRestoresDescriptor(t *testing.T) {
+	requireLinuxPluginMutation(t)
 	root := t.TempDir()
 	descriptor := filepath.Join(root, "Plugins", "PlatformAssetOverrides", "PlatformAssetOverrides.uplugin")
 	if err := os.MkdirAll(filepath.Dir(descriptor), 0o700); err != nil {
@@ -125,6 +128,7 @@ func TestUndoPlatformAssetOverrideFixRestoresDescriptor(t *testing.T) {
 }
 
 func TestFixPlatformAssetOverrideRefusesUnity(t *testing.T) {
+	requireLinuxPluginMutation(t)
 	root := t.TempDir()
 	asset := filepath.Join(root, "Game_Data", "resources.assets")
 	if err := os.MkdirAll(filepath.Dir(asset), 0o700); err != nil {
@@ -136,5 +140,12 @@ func TestFixPlatformAssetOverrideRefusesUnity(t *testing.T) {
 	env := planner.Environment{OS: "linux", XDGStateHome: filepath.Join(root, "state")}
 	if _, err := FixPlatformAssetOverride(env, SteamGame{AppID: "1", InstallPath: root}); err == nil {
 		t.Fatal("expected Unity game to be refused")
+	}
+}
+
+func requireLinuxPluginMutation(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("plugin filesystem mutations are supported only on Linux")
 	}
 }
