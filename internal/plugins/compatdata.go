@@ -38,14 +38,16 @@ type CompatdataPlan struct {
 	Compatdata   string
 	NativeTarget string
 	BackupPath   string
+	ImportSource string
 
 	CurrentState      CompatdataState
 	LinkTarget        string
 	BlockedReason     string
 	RollbackAvailable bool
 
-	RequiresCopy   bool
-	RequiresBackup bool
+	RequiresCopy         bool
+	RequiresBackup       bool
+	DetachesExistingLink bool
 }
 
 // CompatdataResult records the committed transaction for a migration.
@@ -157,9 +159,26 @@ func PlanCompatdataMigration(env planner.Environment, library SteamLibrary) (Com
 	case CompatdataInvalid:
 		plan.BlockedReason = "compatdata is a regular file; Selene will not overwrite it"
 	case CompatdataExternalLink:
-		plan.BlockedReason = "compatdata already points to another location; Selene will not overwrite an external link"
+		plan.DetachesExistingLink = true
+		plan.ImportSource = canonicalPath(resolveLinkTarget(plan.Compatdata, linkTarget))
+		info, statErr := os.Stat(plan.ImportSource)
+		if statErr != nil {
+			plan.BlockedReason = fmt.Sprintf("inspect the existing compatdata link target: %v", statErr)
+		} else if !info.IsDir() {
+			plan.BlockedReason = "the existing compatdata link does not point to a directory"
+		} else {
+			resolvedNativeTarget, resolveErr := resolvePathForMount(plan.NativeTarget)
+			if resolveErr != nil {
+				return CompatdataPlan{}, resolveErr
+			}
+			if pathsOverlap(plan.ImportSource, resolvedNativeTarget) {
+				plan.BlockedReason = "the existing compatdata link target overlaps Selene's native target"
+			} else {
+				plan.RequiresCopy = true
+			}
+		}
 	case CompatdataBrokenLink:
-		plan.BlockedReason = "compatdata is a broken link; repair or remove it manually before migrating"
+		plan.DetachesExistingLink = true
 	case CompatdataManagedLink:
 		plan.NativeTarget = resolveLinkTarget(plan.Compatdata, linkTarget)
 		if backup, ok := compatdataRollbackBackup(env, library); ok {
@@ -179,22 +198,28 @@ func PlanCompatdataMigration(env planner.Environment, library SteamLibrary) (Com
 	if err != nil {
 		return CompatdataPlan{}, err
 	}
-	if state == CompatdataDirectory || state == CompatdataMissing {
-		if mount, ok := findMountFor(mounts, library.Path); ok && mount.point == library.MountPoint && isNTFS(mount.filesystem) && mount.readOnly {
+	if canMigrateCompatdataState(state) {
+		if mount, ok, resolveErr := findMountForResolvedPath(mounts, library.Path); resolveErr != nil {
+			return CompatdataPlan{}, resolveErr
+		} else if ok && isNTFS(mount.filesystem) && mount.readOnly {
 			plan.BlockedReason = "the NTFS Steam library is mounted read-only"
 		}
-		if mount, ok := findMountFor(mounts, plan.NativeTarget); ok {
+		if mount, ok, resolveErr := findMountForResolvedPath(mounts, plan.NativeTarget); resolveErr != nil {
+			return CompatdataPlan{}, resolveErr
+		} else if ok {
 			if isNTFS(mount.filesystem) {
 				plan.BlockedReason = "the Proton compatdata target is also on NTFS; choose a Linux native filesystem"
 			} else if mount.readOnly {
 				plan.BlockedReason = "the native compatdata target filesystem is mounted read-only"
 			}
 		}
-		if reason := nativeTargetConflict(plan.NativeTarget); reason != "" {
+		if reason := nativeTargetConflict(plan.NativeTarget); reason != "" && plan.BlockedReason == "" {
 			plan.BlockedReason = reason
 		}
 	} else if state == CompatdataManagedLink && plan.RollbackAvailable {
-		if mount, ok := findMountFor(mounts, library.Path); ok && mount.point == library.MountPoint && isNTFS(mount.filesystem) && mount.readOnly {
+		if mount, ok, resolveErr := findMountForResolvedPath(mounts, library.Path); resolveErr != nil {
+			return CompatdataPlan{}, resolveErr
+		} else if ok && isNTFS(mount.filesystem) && mount.readOnly {
 			plan.BlockedReason = "the NTFS Steam library is mounted read-only, so its backup cannot be restored"
 		}
 	}
@@ -216,9 +241,20 @@ func ApplyCompatdataMigration(env planner.Environment, plan CompatdataPlan) (Com
 	if freshPlan.BlockedReason != "" {
 		return CompatdataResult{}, errors.New(freshPlan.BlockedReason)
 	}
+	if freshPlan.CurrentState != plan.CurrentState && freshPlan.CurrentState != CompatdataManagedLink {
+		return CompatdataResult{}, errors.New("compatdata changed after confirmation; review the migration plan again")
+	}
+	if plan.CurrentState == CompatdataExternalLink &&
+		!samePath(plan.ImportSource, freshPlan.ImportSource) {
+		return CompatdataResult{}, errors.New("the external compatdata link changed after confirmation; review the plan again")
+	}
+	if plan.CurrentState == CompatdataBrokenLink &&
+		filepath.Clean(resolveLinkTarget(plan.Compatdata, plan.LinkTarget)) != filepath.Clean(resolveLinkTarget(freshPlan.Compatdata, freshPlan.LinkTarget)) {
+		return CompatdataResult{}, errors.New("the broken compatdata link changed after confirmation; review the plan again")
+	}
 
 	// Re-check state to keep the operation idempotent and safe.
-	state, _, err := InspectCompatdata(env, freshPlan.Library)
+	state, currentLinkTarget, err := InspectCompatdata(env, freshPlan.Library)
 	if err != nil {
 		return CompatdataResult{}, err
 	}
@@ -227,12 +263,23 @@ func ApplyCompatdataMigration(env planner.Environment, plan CompatdataPlan) (Com
 		return CompatdataResult{Plan: freshPlan}, nil
 	case CompatdataInvalid:
 		return CompatdataResult{}, errors.New("compatdata is a regular file; refusing to migrate")
-	case CompatdataExternalLink, CompatdataBrokenLink:
-		return CompatdataResult{}, errors.New("compatdata is already a symlink to another destination")
 	}
 
 	if state == CompatdataDirectory && !freshPlan.RequiresCopy {
 		return CompatdataResult{}, errors.New("compatdata is a directory but the plan does not require a copy")
+	}
+	if state == CompatdataExternalLink && (!freshPlan.DetachesExistingLink || !freshPlan.RequiresCopy || freshPlan.ImportSource == "") {
+		return CompatdataResult{}, errors.New("the external compatdata link does not have a safe import plan")
+	}
+	if state == CompatdataExternalLink && !samePath(resolveLinkTarget(freshPlan.Compatdata, currentLinkTarget), freshPlan.ImportSource) {
+		return CompatdataResult{}, errors.New("the external compatdata link changed after confirmation; review the plan again")
+	}
+	if state == CompatdataBrokenLink && !freshPlan.DetachesExistingLink {
+		return CompatdataResult{}, errors.New("the broken compatdata link does not have a safe replacement plan")
+	}
+	if state == CompatdataBrokenLink && filepath.Clean(resolveLinkTarget(freshPlan.Compatdata, currentLinkTarget)) !=
+		filepath.Clean(resolveLinkTarget(freshPlan.Compatdata, freshPlan.LinkTarget)) {
+		return CompatdataResult{}, errors.New("the broken compatdata link changed after confirmation; review the plan again")
 	}
 
 	// Ensure Steam is not running before mutating.
@@ -255,15 +302,27 @@ func ApplyCompatdataMigration(env planner.Environment, plan CompatdataPlan) (Com
 		return CompatdataResult{}, abort(tx, fmt.Errorf("create native compatdata target: %w", err))
 	}
 
-	if state == CompatdataDirectory && freshPlan.RequiresCopy {
-		if err := copyCompatdata(freshPlan.Compatdata, freshPlan.NativeTarget); err != nil {
+	if freshPlan.RequiresCopy {
+		copySource := freshPlan.Compatdata
+		if state == CompatdataExternalLink {
+			copySource = freshPlan.ImportSource
+		}
+		if err := copyCompatdata(copySource, freshPlan.NativeTarget); err != nil {
 			return CompatdataResult{}, abort(tx, fmt.Errorf("copy compatdata: %w", err))
 		}
-		if err := verifyCopy(freshPlan.Compatdata, freshPlan.NativeTarget); err != nil {
+		if err := verifyCopy(copySource, freshPlan.NativeTarget); err != nil {
 			return CompatdataResult{}, abort(tx, fmt.Errorf("verify copied compatdata: %w", err))
 		}
+	}
+
+	if state == CompatdataDirectory && freshPlan.RequiresBackup {
 		if err := os.Rename(freshPlan.Compatdata, freshPlan.BackupPath); err != nil {
 			return CompatdataResult{}, abort(tx, fmt.Errorf("back up original compatdata: %w", err))
+		}
+	}
+	if freshPlan.DetachesExistingLink {
+		if err := removeExistingCompatdataLink(freshPlan.Compatdata); err != nil {
+			return CompatdataResult{}, abort(tx, err)
 		}
 	}
 
@@ -499,11 +558,63 @@ func readMounts() ([]mount, error) {
 	return parseMountInfoLines(data)
 }
 
+func canMigrateCompatdataState(state CompatdataState) bool {
+	return state == CompatdataDirectory || state == CompatdataMissing ||
+		state == CompatdataExternalLink || state == CompatdataBrokenLink
+}
+
+// findMountForResolvedPath classifies the filesystem using the physical path.
+// This matters on immutable distributions where /home is commonly a symlink to
+// /var/home: mountinfo describes /var/home, while XDG paths still use /home.
+// The destination may not exist yet, so resolvePathForMount first resolves the
+// nearest existing ancestor and then appends the missing suffix again.
+func findMountForResolvedPath(mounts []mount, path string) (mount, bool, error) {
+	resolved, err := resolvePathForMount(path)
+	if err != nil {
+		return mount{}, false, err
+	}
+	found, ok := findMountFor(mounts, resolved)
+	return found, ok, nil
+}
+
+func resolvePathForMount(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("resolve mount path %q: path is not absolute", path)
+	}
+	current := filepath.Clean(path)
+	var missing []string
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", fmt.Errorf("resolve mount path %s: %w", path, err)
+			}
+			for index := len(missing) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missing[index])
+			}
+			return filepath.Clean(resolved), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect mount path ancestor %s: %w", current, err)
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("resolve mount path %s: no existing ancestor", path)
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
+}
+
 func resolveLinkTarget(link, target string) string {
 	if filepath.IsAbs(target) {
 		return filepath.Clean(target)
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(link), target))
+}
+
+func pathsOverlap(left, right string) bool {
+	return isWithin(left, right) || isWithin(right, left)
 }
 
 func samePath(left, right string) bool {
@@ -539,12 +650,28 @@ func nativeTargetConflict(path string) string {
 	return ""
 }
 
+func removeExistingCompatdataLink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect existing compatdata link: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return errors.New("compatdata changed and is no longer a symlink; refusing to replace it")
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("detach existing compatdata link: %w", err)
+	}
+	return nil
+}
+
 func ensureCompatdataLibraryWritable(library SteamLibrary) error {
 	mounts, err := readMounts()
 	if err != nil {
 		return err
 	}
-	if mount, ok := findMountFor(mounts, library.Path); ok && mount.point == library.MountPoint && isNTFS(mount.filesystem) && mount.readOnly {
+	if mount, ok, err := findMountForResolvedPath(mounts, library.Path); err != nil {
+		return err
+	} else if ok && isNTFS(mount.filesystem) && mount.readOnly {
 		return errors.New("the NTFS Steam library is mounted read-only")
 	}
 	return nil
@@ -706,8 +833,13 @@ func copyCompatdata(source, destination string) error {
 		}
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
-			// Do not follow external symlinks during the copy.
-			return fmt.Errorf("refusing to copy symlink inside compatdata: %s", current)
+			// Wine prefixes contain links such as dosdevices/c:. Recreate the
+			// link itself without following or reading from its destination.
+			linkTarget, err := os.Readlink(current)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(linkTarget, target)
 		case info.IsDir():
 			return os.MkdirAll(target, info.Mode().Perm())
 		case info.Mode().IsRegular():
@@ -739,11 +871,35 @@ func verifyCopy(source, destination string) error {
 		if err != nil {
 			return fmt.Errorf("missing copied path %s: %w", target, err)
 		}
-		if srcInfo.Mode().IsRegular() != dstInfo.Mode().IsRegular() {
-			return fmt.Errorf("type mismatch at %s", target)
-		}
-		if srcInfo.Mode().IsRegular() && srcInfo.Size() != dstInfo.Size() {
-			return fmt.Errorf("size mismatch at %s", target)
+		switch {
+		case srcInfo.Mode()&os.ModeSymlink != 0:
+			if dstInfo.Mode()&os.ModeSymlink == 0 {
+				return fmt.Errorf("type mismatch at %s", target)
+			}
+			sourceLink, err := os.Readlink(current)
+			if err != nil {
+				return err
+			}
+			targetLink, err := os.Readlink(target)
+			if err != nil {
+				return err
+			}
+			if sourceLink != targetLink {
+				return fmt.Errorf("symlink target mismatch at %s", target)
+			}
+		case srcInfo.IsDir():
+			if !dstInfo.IsDir() || dstInfo.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("type mismatch at %s", target)
+			}
+		case srcInfo.Mode().IsRegular():
+			if !dstInfo.Mode().IsRegular() {
+				return fmt.Errorf("type mismatch at %s", target)
+			}
+			if srcInfo.Size() != dstInfo.Size() {
+				return fmt.Errorf("size mismatch at %s", target)
+			}
+		default:
+			return fmt.Errorf("unsupported file type inside compatdata: %s", current)
 		}
 		return nil
 	})
