@@ -24,6 +24,7 @@ func TestInspectCompatdataStates(t *testing.T) {
 		t.Skip("symlink behavior varies by environment")
 	}
 	root := t.TempDir()
+	env := pluginEnvironment(root)
 	library := SteamLibrary{Path: filepath.Join(root, "SteamLibrary")}
 	steamapps := filepath.Join(library.Path, "steamapps")
 	if err := os.MkdirAll(steamapps, 0o700); err != nil {
@@ -31,7 +32,7 @@ func TestInspectCompatdataStates(t *testing.T) {
 	}
 
 	// Missing.
-	state, err := InspectCompatdata(library)
+	state, _, err := InspectCompatdata(env, library)
 	if err != nil || state != CompatdataMissing {
 		t.Fatalf("missing state = %q, err = %v", state, err)
 	}
@@ -41,7 +42,7 @@ func TestInspectCompatdataStates(t *testing.T) {
 	if err := os.MkdirAll(compatdata, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	state, err = InspectCompatdata(library)
+	state, _, err = InspectCompatdata(env, library)
 	if err != nil || state != CompatdataDirectory {
 		t.Fatalf("directory state = %q, err = %v", state, err)
 	}
@@ -57,7 +58,7 @@ func TestInspectCompatdataStates(t *testing.T) {
 	if err := os.Symlink(target, compatdata); err != nil {
 		t.Fatal(err)
 	}
-	state, err = InspectCompatdata(library)
+	state, _, err = InspectCompatdata(env, library)
 	if err != nil || state != CompatdataExternalLink {
 		t.Fatalf("external link state = %q, err = %v", state, err)
 	}
@@ -69,7 +70,7 @@ func TestInspectCompatdataStates(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "missing"), compatdata); err != nil {
 		t.Fatal(err)
 	}
-	state, err = InspectCompatdata(library)
+	state, _, err = InspectCompatdata(env, library)
 	if err != nil || state != CompatdataBrokenLink {
 		t.Fatalf("broken link state = %q, err = %v", state, err)
 	}
@@ -81,7 +82,7 @@ func TestInspectCompatdataStates(t *testing.T) {
 	if err := os.WriteFile(compatdata, []byte("not a dir"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	state, err = InspectCompatdata(library)
+	state, _, err = InspectCompatdata(env, library)
 	if err != nil || state != CompatdataInvalid {
 		t.Fatalf("invalid state = %q, err = %v", state, err)
 	}
