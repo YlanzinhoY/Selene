@@ -226,14 +226,7 @@ func steamLibraryDirectories(env planner.Environment) ([]string, error) {
 		libraries = append(libraries, path)
 	}
 
-	roots := []string{
-		filepath.Join(env.Home, ".local", "share", "Steam"),
-		filepath.Join(env.Home, ".steam", "steam"),
-		filepath.Join(env.Home, ".steam", "root"),
-		filepath.Join(env.Home, ".steam", "debian-installation"),
-		filepath.Join(env.Home, ".var", "app", "com.valvesoftware.Steam", "data", "Steam"),
-	}
-	for _, root := range roots {
+	for _, root := range steamRootCandidates(env) {
 		add(root)
 		data, err := os.ReadFile(filepath.Join(root, "steamapps", "libraryfolders.vdf"))
 		if err != nil {
