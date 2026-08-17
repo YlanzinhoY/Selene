@@ -17,6 +17,7 @@ import (
 	"github.com/selene-linux/selene/internal/doctor"
 	"github.com/selene-linux/selene/internal/installer"
 	"github.com/selene-linux/selene/internal/planner"
+	"github.com/selene-linux/selene/internal/plugins"
 	"github.com/selene-linux/selene/internal/transaction"
 )
 
@@ -33,6 +34,17 @@ const (
 	screenRollbackResult
 	screenUninstallConfirm
 	screenUninstallResult
+	screenPlugins
+	screenPlatformAssetOverride
+	screenPlatformAssetOverrideDetails
+	screenPlatformAssetOverrideFixConfirm
+	screenPlatformAssetOverrideFixResult
+	screenCompatdata
+	screenCompatdataPlan
+	screenCompatdataSteamConfirm
+	screenCompatdataNTFSManual
+	screenCompatdataNTFSResult
+	screenCompatdataResult
 	screenAbout
 )
 
@@ -83,34 +95,96 @@ type uninstallMsg struct {
 	err    error
 }
 
+type steamGamesMsg struct {
+	games []plugins.SteamGame
+	err   error
+}
+
+type assetOverrideAnalysisMsg struct {
+	analysis plugins.AssetOverrideAnalysis
+	err      error
+}
+
+type assetOverrideFixMsg struct {
+	fix plugins.PlatformAssetOverrideFix
+	err error
+}
+
+type compatdataMsg struct {
+	plans []plugins.CompatdataPlan
+	err   error
+}
+
+type compatdataApplyMsg struct {
+	result     plugins.CompatdataResult
+	rolledBack bool
+	err        error
+}
+
+type compatdataSteamClosedMsg struct {
+	err error
+}
+
+type compatdataNTFSRepairMsg struct {
+	result plugins.NTFSSessionRepairResult
+	plan   plugins.CompatdataPlan
+	err    error
+}
+
+type compatdataPendingAction int
+
+const (
+	compatdataActionNone compatdataPendingAction = iota
+	compatdataActionConfigure
+	compatdataActionRestore
+	compatdataActionRemountNTFS
+)
+
 type menuItem struct {
 	title       string
+	badge       string
 	description string
+	hidden      bool
 }
 
 type model struct {
-	width       int
-	height      int
-	cursor      int
-	screen      screen
-	ctx         context.Context
-	cancel      context.CancelFunc
-	checking    bool
-	mutating    bool
-	activity    string
-	spinner     spinner.Model
-	viewport    viewport.Model
-	report      *doctor.Report
-	plan        *planner.Plan
-	fetched     []artifact.Result
-	installed   *installer.Result
-	rolledBack  *installer.RollbackResult
-	removal     *installer.UninstallPreview
-	uninstalled *installer.UninstallResult
-	history     []transaction.Journal
-	log         string
-	err         error
-	items       []menuItem
+	width            int
+	height           int
+	cursor           int
+	pluginCursor     int
+	gameCursor       int
+	screen           screen
+	ctx              context.Context
+	cancel           context.CancelFunc
+	checking         bool
+	mutating         bool
+	activity         string
+	spinner          spinner.Model
+	viewport         viewport.Model
+	report           *doctor.Report
+	plan             *planner.Plan
+	fetched          []artifact.Result
+	installed        *installer.Result
+	rolledBack       *installer.RollbackResult
+	removal          *installer.UninstallPreview
+	uninstalled      *installer.UninstallResult
+	history          []transaction.Journal
+	log              string
+	err              error
+	items            []menuItem
+	pluginItems      []menuItem
+	steamGames       []plugins.SteamGame
+	selectedGame     plugins.SteamGame
+	gameAnalysis     *plugins.AssetOverrideAnalysis
+	gameFix          *plugins.PlatformAssetOverrideFix
+	compatPlans      []plugins.CompatdataPlan
+	compatCursor     int
+	selectedPlan     plugins.CompatdataPlan
+	compatResult     *plugins.CompatdataResult
+	compatRolledBack bool
+	compatPending    compatdataPendingAction
+	compatNTFSResult *plugins.NTFSSessionRepairResult
+	steamRunning     func() bool
 }
 
 var (
@@ -122,6 +196,7 @@ var (
 	errorColor  = lipgloss.Color("#FB7185")
 
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(moonColor)
+	badgeStyle = lipgloss.NewStyle().Bold(true).Foreground(goodColor)
 	mutedStyle = lipgloss.NewStyle().Foreground(mutedColor)
 	boxStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(moonColor).Padding(1, 4)
 )
@@ -141,11 +216,13 @@ func newModel() model {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(accentColor)
 	return model{
-		ctx:      ctx,
-		cancel:   cancel,
-		spinner:  s,
-		viewport: viewport.New(80, 15),
-		items:    defaultMenuItems(),
+		ctx:          ctx,
+		cancel:       cancel,
+		spinner:      s,
+		viewport:     viewport.New(80, 15),
+		items:        defaultMenuItems(),
+		pluginItems:  defaultPluginItems(),
+		steamRunning: plugins.SteamRunning,
 	}
 }
 
@@ -244,6 +321,90 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenUninstallResult
 		m.refreshViewport()
 		return m, nil
+	case steamGamesMsg:
+		m.checking = false
+		m.activity = ""
+		m.err = msg.err
+		m.steamGames = msg.games
+		m.gameCursor = 0
+		m.screen = screenPlatformAssetOverride
+		m.refreshViewport()
+		return m, nil
+	case assetOverrideAnalysisMsg:
+		m.checking = false
+		m.activity = ""
+		m.err = msg.err
+		m.gameAnalysis = &msg.analysis
+		m.screen = screenPlatformAssetOverrideDetails
+		m.refreshViewport()
+		return m, nil
+	case assetOverrideFixMsg:
+		m.checking = false
+		m.mutating = false
+		m.activity = ""
+		m.err = msg.err
+		m.gameFix = &msg.fix
+		m.screen = screenPlatformAssetOverrideFixResult
+		m.refreshViewport()
+		return m, nil
+	case compatdataMsg:
+		m.checking = false
+		m.activity = ""
+		m.err = msg.err
+		m.compatPlans = msg.plans
+		m.compatCursor = 0
+		m.compatResult = nil
+		m.compatRolledBack = false
+		m.screen = screenCompatdata
+		m.refreshViewport()
+		return m, nil
+	case compatdataApplyMsg:
+		m.checking = false
+		m.mutating = false
+		m.activity = ""
+		m.err = msg.err
+		m.compatResult = &msg.result
+		m.compatRolledBack = msg.rolledBack
+		m.compatPending = compatdataActionNone
+		m.screen = screenCompatdataResult
+		m.refreshViewport()
+		return m, nil
+	case compatdataSteamClosedMsg:
+		m.err = msg.err
+		if msg.err != nil {
+			m.checking = false
+			m.mutating = false
+			m.activity = ""
+			m.refreshViewport()
+			return m, nil
+		}
+		m.checking = true
+		m.mutating = true
+		if m.compatPending == compatdataActionRemountNTFS {
+			m.activity = textActivityRepairNTFSMount
+			return m, tea.Batch(m.spinner.Tick, repairNTFSMount(m.ctx, m.selectedPlan))
+		} else if m.compatPending == compatdataActionRestore {
+			m.activity = textActivityRollbackCompatdata
+		} else {
+			m.activity = textActivityConfigureCompatdata
+		}
+		return m, tea.Batch(m.spinner.Tick, runCompatdataOperation(m.selectedPlan, m.compatPending))
+	case compatdataNTFSRepairMsg:
+		m.checking = false
+		m.mutating = false
+		m.activity = ""
+		m.err = msg.err
+		m.compatPending = compatdataActionNone
+		m.compatNTFSResult = &msg.result
+		if msg.err == nil {
+			m.selectedPlan = msg.plan
+			if m.compatCursor >= 0 && m.compatCursor < len(m.compatPlans) {
+				m.compatPlans[m.compatCursor] = msg.plan
+			}
+		}
+		m.screen = screenCompatdataNTFSResult
+		m.refreshViewport()
+		return m, nil
 	case tea.KeyMsg:
 		key := msg.String()
 		if key == "ctrl+c" || key == "q" {
@@ -295,11 +456,257 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = textActivityRemovePreview
 					return m, tea.Batch(m.spinner.Tick, previewUninstall())
 				case 6:
-					m.screen = screenAbout
+					m.screen = screenPlugins
 				case 7:
+					m.screen = screenAbout
+				case 8:
 					return m, tea.Quit
 				}
 			}
+		case screenPlugins:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenHome
+				return m, nil
+			case "up", "k":
+				if m.pluginCursor > 0 {
+					m.pluginCursor--
+				}
+			case "down", "j":
+				if m.pluginCursor < len(m.pluginItems)-1 {
+					m.pluginCursor++
+				}
+			case "enter", " ":
+				switch m.pluginCursor {
+				case 0:
+					m.checking = true
+					m.activity = textActivityScanCompatdata
+					return m, tea.Batch(m.spinner.Tick, scanCompatdata())
+				case 1:
+					m.checking = true
+					m.activity = textActivitySteamGames
+					return m, tea.Batch(m.spinner.Tick, scanSteamGames())
+				}
+			}
+		case screenPlatformAssetOverride:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenPlugins
+				return m, nil
+			case "up", "k":
+				if m.gameCursor > 0 {
+					m.gameCursor--
+					m.refreshViewport()
+				}
+			case "down", "j":
+				if m.gameCursor < len(m.steamGames)-1 {
+					m.gameCursor++
+					m.refreshViewport()
+				}
+			case "enter", " ":
+				if game, ok := m.currentSteamGame(); ok && m.err == nil {
+					m.selectedGame = game
+					m.checking = true
+					m.activity = textActivityAnalyzeGame
+					return m, tea.Batch(m.spinner.Tick, analyzePlatformAssetOverride(game))
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenPlatformAssetOverrideDetails:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenPlatformAssetOverride
+				m.refreshViewport()
+				return m, nil
+			case "f":
+				if m.err == nil && m.gameAnalysis != nil && m.gameAnalysis.Engine == plugins.GameEngineUnreal && m.gameAnalysis.PlatformPluginDescriptor != "" {
+					m.screen = screenPlatformAssetOverrideFixConfirm
+					m.refreshViewport()
+					return m, nil
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenPlatformAssetOverrideFixConfirm:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenPlatformAssetOverrideDetails
+				m.refreshViewport()
+				return m, nil
+			case "f":
+				if m.err == nil && m.gameAnalysis != nil {
+					m.checking = true
+					m.mutating = true
+					m.activity = textActivityFixPlatformAssetOverride
+					return m, tea.Batch(m.spinner.Tick, fixPlatformAssetOverride(m.selectedGame))
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenPlatformAssetOverrideFixResult:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenPlatformAssetOverride
+				m.refreshViewport()
+				return m, nil
+			case "u":
+				if m.err == nil && m.gameFix != nil {
+					m.checking = true
+					m.mutating = true
+					m.activity = textActivityUndoPlatformAssetOverride
+					return m, tea.Batch(m.spinner.Tick, undoPlatformAssetOverrideFix(m.selectedGame))
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdata:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenPlugins
+				return m, nil
+			case "up", "k":
+				if m.compatCursor > 0 {
+					m.compatCursor--
+					m.refreshViewport()
+				}
+			case "down", "j":
+				if m.compatCursor < len(m.compatPlans)-1 {
+					m.compatCursor++
+					m.refreshViewport()
+				}
+			case "enter", " ":
+				if plan, ok := m.currentCompatdataPlan(); ok && m.err == nil {
+					m.selectedPlan = plan
+					m.screen = screenCompatdataPlan
+					m.refreshViewport()
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdataPlan:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenCompatdata
+				m.refreshViewport()
+				return m, nil
+			case "c":
+				if m.err == nil && m.selectedPlan.Library.Path != "" && m.selectedPlan.BlockedReason == "" &&
+					(m.selectedPlan.CurrentState == plugins.CompatdataDirectory || m.selectedPlan.CurrentState == plugins.CompatdataMissing ||
+						m.selectedPlan.CurrentState == plugins.CompatdataExternalLink || m.selectedPlan.CurrentState == plugins.CompatdataBrokenLink) {
+					m.compatPending = compatdataActionConfigure
+					if m.isSteamRunning() {
+						m.err = nil
+						m.screen = screenCompatdataSteamConfirm
+						m.refreshViewport()
+						return m, nil
+					}
+					m.checking = true
+					m.mutating = true
+					m.activity = textActivityConfigureCompatdata
+					return m, tea.Batch(m.spinner.Tick, runCompatdataOperation(m.selectedPlan, m.compatPending))
+				}
+			case "r":
+				if m.err == nil && m.selectedPlan.Library.Path != "" && m.selectedPlan.BlockedReason == "" &&
+					m.selectedPlan.CurrentState == plugins.CompatdataManagedLink && m.selectedPlan.RollbackAvailable {
+					m.compatPending = compatdataActionRestore
+					if m.isSteamRunning() {
+						m.err = nil
+						m.screen = screenCompatdataSteamConfirm
+						m.refreshViewport()
+						return m, nil
+					}
+					m.checking = true
+					m.mutating = true
+					m.activity = textActivityRollbackCompatdata
+					return m, tea.Batch(m.spinner.Tick, runCompatdataOperation(m.selectedPlan, m.compatPending))
+				}
+			case "f":
+				assessment := m.selectedPlan.MountAssessment
+				if m.err == nil && m.selectedPlan.Library.Path != "" &&
+					assessment.Compatibility == plugins.FilenameCompatibilityIncompatible && assessment.CanRepair {
+					m.compatPending = compatdataActionRemountNTFS
+					if m.isSteamRunning() {
+						m.err = nil
+						m.screen = screenCompatdataSteamConfirm
+						m.refreshViewport()
+						return m, nil
+					}
+					m.checking = true
+					m.mutating = true
+					m.activity = textActivityRepairNTFSMount
+					return m, tea.Batch(m.spinner.Tick, repairNTFSMount(m.ctx, m.selectedPlan))
+				}
+			case "m":
+				if m.selectedPlan.Library.Path != "" &&
+					m.selectedPlan.MountAssessment.Compatibility == plugins.FilenameCompatibilityIncompatible {
+					m.err = nil
+					m.screen = screenCompatdataNTFSManual
+					m.refreshViewport()
+					return m, nil
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdataSteamConfirm:
+			switch key {
+			case "esc", "backspace":
+				m.err = nil
+				m.compatPending = compatdataActionNone
+				m.screen = screenCompatdataPlan
+				m.refreshViewport()
+				return m, nil
+			case "c":
+				if m.compatPending != compatdataActionNone && m.selectedPlan.Library.Path != "" {
+					m.err = nil
+					m.checking = true
+					m.mutating = true
+					m.activity = textActivityCloseSteam
+					return m, tea.Batch(m.spinner.Tick, closeSteamForCompatdata(m.ctx))
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdataNTFSManual:
+			if key == "esc" || key == "backspace" {
+				m.screen = screenCompatdataPlan
+				m.refreshViewport()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdataNTFSResult:
+			switch key {
+			case "esc", "backspace":
+				m.err = nil
+				m.screen = screenCompatdataPlan
+				m.refreshViewport()
+				return m, nil
+			case "m":
+				m.err = nil
+				m.screen = screenCompatdataNTFSManual
+				m.refreshViewport()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdataResult:
+			if key == "esc" || key == "backspace" {
+				m.screen = screenPlugins
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
 		case screenDoctor:
 			switch key {
 			case "esc", "backspace":
@@ -427,8 +834,14 @@ func (m model) View() string {
 		case screenFetch:
 			body = m.viewport.View()
 		case screenInstallConfirm, screenInstallResult, screenRollbackConfirm, screenRollbackResult,
-			screenUninstallConfirm, screenUninstallResult:
+			screenUninstallConfirm, screenUninstallResult, screenPlatformAssetOverride,
+			screenPlatformAssetOverrideDetails, screenPlatformAssetOverrideFixConfirm,
+			screenPlatformAssetOverrideFixResult, screenCompatdata, screenCompatdataPlan,
+			screenCompatdataSteamConfirm, screenCompatdataNTFSManual, screenCompatdataNTFSResult,
+			screenCompatdataResult:
 			body = m.viewport.View()
+		case screenPlugins:
+			body = m.pluginsView()
 		case screenAbout:
 			body = aboutView()
 		default:
@@ -449,6 +862,38 @@ func (m model) View() string {
 		footerText = textFooterRollbackConfirm
 	} else if m.screen == screenUninstallConfirm && !m.checking {
 		footerText = textFooterRemoveConfirm
+	} else if m.screen == screenPlugins && !m.checking {
+		footerText = textFooterPlugins
+	} else if m.screen == screenPlatformAssetOverride && !m.checking {
+		footerText = textFooterPlatformAssetOverride
+	} else if m.screen == screenPlatformAssetOverrideDetails && !m.checking {
+		footerText = textFooterPlatformAssetOverrideDetails
+	} else if m.screen == screenPlatformAssetOverrideFixConfirm && !m.checking {
+		footerText = textFooterPlatformAssetOverrideFixConfirm
+	} else if m.screen == screenPlatformAssetOverrideFixResult && !m.checking {
+		footerText = textFooterPlatformAssetOverrideFixResult
+	} else if m.screen == screenCompatdata && !m.checking {
+		footerText = textFooterCompatdata
+	} else if m.screen == screenCompatdataPlan && !m.checking {
+		footerText = textFooterCompatdataPlan
+		if m.selectedPlan.MountAssessment.Compatibility == plugins.FilenameCompatibilityIncompatible {
+			footerText = textFooterCompatdataPlanRepair
+		} else if m.selectedPlan.BlockedReason == "" &&
+			(m.selectedPlan.CurrentState == plugins.CompatdataDirectory || m.selectedPlan.CurrentState == plugins.CompatdataMissing ||
+				m.selectedPlan.CurrentState == plugins.CompatdataExternalLink || m.selectedPlan.CurrentState == plugins.CompatdataBrokenLink) {
+			footerText = textFooterCompatdataPlanConfigure
+		} else if m.selectedPlan.BlockedReason == "" &&
+			m.selectedPlan.CurrentState == plugins.CompatdataManagedLink && m.selectedPlan.RollbackAvailable {
+			footerText = textFooterCompatdataPlanRollback
+		}
+	} else if m.screen == screenCompatdataSteamConfirm && !m.checking {
+		footerText = textFooterCompatdataSteamConfirm
+	} else if m.screen == screenCompatdataNTFSManual && !m.checking {
+		footerText = textFooterCompatdataNTFSManual
+	} else if m.screen == screenCompatdataNTFSResult && !m.checking {
+		footerText = textFooterCompatdataNTFSResult
+	} else if m.screen == screenCompatdataResult && !m.checking {
+		footerText = textFooterResult
 	} else if (m.screen == screenInstallResult || m.screen == screenRollbackResult || m.screen == screenUninstallResult) && !m.checking {
 		footerText = textFooterResult
 	} else if m.mutating {
@@ -473,7 +918,11 @@ func (m model) homeView() string {
 			cursor = "› "
 			style = style.Bold(true).Foreground(accentColor)
 		}
-		fmt.Fprintf(&b, "%s%s\n", cursor, style.Render(item.title))
+		fmt.Fprintf(&b, "%s%s", cursor, style.Render(item.title))
+		if item.badge != "" {
+			fmt.Fprintf(&b, " %s", badgeStyle.Render(item.badge))
+		}
+		b.WriteString("\n")
 		if i == 3 || i == 5 {
 			b.WriteString("\n")
 		}
@@ -481,6 +930,26 @@ func (m model) homeView() string {
 	if m.cursor >= 0 && m.cursor < len(m.items) {
 		b.WriteString("\n")
 		b.WriteString(mutedStyle.Render("  " + m.items[m.cursor].description))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) pluginsView() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textPluginsTitle))
+	b.WriteString("\n\n")
+	for index, item := range m.pluginItems {
+		cursor := "  "
+		style := lipgloss.NewStyle()
+		if index == m.pluginCursor {
+			cursor = "› "
+			style = style.Bold(true).Foreground(accentColor)
+		}
+		fmt.Fprintf(&b, "%s%s\n", cursor, style.Render(item.title))
+	}
+	if m.pluginCursor >= 0 && m.pluginCursor < len(m.pluginItems) {
+		b.WriteString("\n")
+		b.WriteString(mutedStyle.Render("  " + m.pluginItems[m.pluginCursor].description))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -552,6 +1021,26 @@ func (m *model) refreshViewport() {
 		content = m.uninstallConfirmContent()
 	case screenUninstallResult:
 		content = m.uninstallResultContent()
+	case screenPlatformAssetOverride:
+		content = m.platformAssetOverrideContent()
+	case screenPlatformAssetOverrideDetails:
+		content = m.platformAssetOverrideDetailsContent()
+	case screenPlatformAssetOverrideFixConfirm:
+		content = m.platformAssetOverrideFixConfirmContent()
+	case screenPlatformAssetOverrideFixResult:
+		content = m.platformAssetOverrideFixResultContent()
+	case screenCompatdata:
+		content = m.compatdataContent()
+	case screenCompatdataPlan:
+		content = m.compatdataPlanContent()
+	case screenCompatdataSteamConfirm:
+		content = m.compatdataSteamConfirmContent()
+	case screenCompatdataNTFSManual:
+		content = m.compatdataNTFSManualContent()
+	case screenCompatdataNTFSResult:
+		content = m.compatdataNTFSResultContent()
+	case screenCompatdataResult:
+		content = m.compatdataResultContent()
 	default:
 		return
 	}
@@ -624,6 +1113,414 @@ func (m model) fetchContent() string {
 		b.WriteString("  " + mutedStyle.Render("sha256:"+compactHash(result.SHA256)) + "\n\n")
 	}
 	b.WriteString(mutedStyle.Render(textCacheOnly))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) platformAssetOverrideContent() string {
+	if m.err != nil {
+		return titleStyle.Render(textPlatformAssetOverrideTitle) + "\n\n" + errorStyle().Render("× "+m.err.Error())
+	}
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textPlatformAssetOverrideTitle))
+	b.WriteString("\n\n")
+	b.WriteString(textPlatformAssetOverrideIntro)
+	b.WriteString("\n\n")
+	if len(m.steamGames) == 0 {
+		b.WriteString(mutedStyle.Render(textNoSteamGames))
+		return b.String()
+	}
+	for index, game := range m.steamGames {
+		cursor := "  "
+		style := lipgloss.NewStyle()
+		if index == m.gameCursor {
+			cursor = "› "
+			style = style.Bold(true).Foreground(accentColor)
+		}
+		b.WriteString(cursor + style.Render(game.Name) + "\n")
+		b.WriteString("  " + mutedStyle.Render(fmt.Sprintf(textSteamGameMetadataFormat, game.AppID, game.LibraryPath)) + "\n\n")
+	}
+	b.WriteString(mutedStyle.Render(textPlatformAssetOverrideSelectHint))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) platformAssetOverrideDetailsContent() string {
+	if m.err != nil {
+		return titleStyle.Render(textPlatformAssetOverrideAnalysisTitle) + "\n\n" + errorStyle().Render("× "+m.err.Error())
+	}
+	if m.gameAnalysis == nil {
+		return titleStyle.Render(textPlatformAssetOverrideAnalysisTitle) + "\n\n" + mutedStyle.Render(textNoPlatformAssetOverrideAnalysis)
+	}
+	analysis := m.gameAnalysis
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textPlatformAssetOverrideAnalysisTitle + " · " + analysis.Game.Name))
+	b.WriteString("\n\n")
+	b.WriteString(textSteamGamePathLabel + analysis.Game.InstallPath + "\n")
+	b.WriteString(textDetectedEngineLabel + gameEngineLabel(analysis.Engine) + "\n\n")
+
+	if analysis.PlatformPluginDescriptor != "" {
+		b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textPlatformPluginFound))
+		b.WriteString("\n")
+		b.WriteString("  " + analysis.PlatformPluginDescriptor + "\n\n")
+	} else if analysis.PlatformPluginReferenced {
+		b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textPlatformPluginReferenced))
+		b.WriteString("\n\n")
+	} else {
+		b.WriteString(mutedStyle.Render(textPlatformPluginNotFound))
+		b.WriteString("\n\n")
+	}
+
+	if len(analysis.UnityAssets) > 0 {
+		b.WriteString(mutedStyle.Render(textUnityAssetsFound))
+		b.WriteString("\n")
+		for _, asset := range analysis.UnityAssets {
+			b.WriteString("  · " + asset + "\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(textPlatformAssetOverrideSafety + "\n\n")
+	b.WriteString(mutedStyle.Render(textPlatformAssetOverrideVerifyHint))
+	if analysis.Engine == plugins.GameEngineUnreal && analysis.PlatformPluginDescriptor != "" {
+		b.WriteString("\n\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render(textPlatformAssetOverrideFixAction))
+		b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) platformAssetOverrideFixConfirmContent() string {
+	if m.gameAnalysis == nil {
+		return titleStyle.Render(textPlatformAssetOverrideFixConfirmTitle) + "\n\n" + mutedStyle.Render(textNoPlatformAssetOverrideAnalysis)
+	}
+	analysis := m.gameAnalysis
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textPlatformAssetOverrideFixConfirmTitle + " · " + analysis.Game.Name))
+	b.WriteString("\n\n")
+	b.WriteString(textPlatformAssetOverrideFixIntro + "\n\n")
+	b.WriteString(textPlatformPluginFound + "\n")
+	b.WriteString("  " + analysis.PlatformPluginDescriptor + "\n\n")
+	b.WriteString(textPlatformAssetOverrideFixSafety + "\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textPlatformAssetOverrideFixConfirmAction))
+	b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) platformAssetOverrideFixResultContent() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textPlatformAssetOverrideFixResultTitle))
+	b.WriteString("\n\n")
+	if m.err != nil {
+		b.WriteString(errorStyle().Render("× " + m.err.Error()))
+		return b.String()
+	}
+	if m.gameFix == nil {
+		return b.String() + mutedStyle.Render(textNoPlatformAssetOverrideFix)
+	}
+	b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textPlatformAssetOverrideFixed))
+	b.WriteString("\n")
+	b.WriteString(textSteamGamePathLabel + m.gameFix.Game.Name + "\n")
+	b.WriteString(textDisabledDescriptorLabel + m.gameFix.DisabledFile + "\n")
+	if m.gameFix.TransactionID != "" {
+		b.WriteString(textTransactionLabel + m.gameFix.TransactionID + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(textPlatformAssetOverrideFixResultHint))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) compatdataContent() string {
+	if m.err != nil {
+		return titleStyle.Render(textCompatdataTitle) + "\n\n" + errorStyle().Render("× "+m.err.Error())
+	}
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textCompatdataTitle))
+	b.WriteString("\n\n")
+	b.WriteString(textCompatdataIntro)
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render(textNTFSDualBootOnlyNotice))
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render(textNTFSWindowsSystemDiskWarning))
+	b.WriteString("\n\n")
+	if len(m.compatPlans) == 0 {
+		b.WriteString(mutedStyle.Render(textNoCompatdataLibraries))
+		return b.String()
+	}
+	for index, plan := range m.compatPlans {
+		cursor := "  "
+		style := lipgloss.NewStyle()
+		if index == m.compatCursor {
+			cursor = "› "
+			style = style.Bold(true).Foreground(accentColor)
+		}
+		b.WriteString(cursor + style.Render(plan.Library.Path) + "\n")
+		b.WriteString("  " + mutedStyle.Render(fmt.Sprintf(textCompatdataMetadataFormat, plan.Library.Filesystem, plan.Library.MountPoint)) + "\n")
+		b.WriteString("  " + mutedStyle.Render(textCompatdataStateLabel+string(plan.CurrentState)) + "\n")
+		b.WriteString("  " + mountCompatibilityStyle(plan.MountAssessment).Render(
+			textNTFSFilenameStatusLabel+string(plan.MountAssessment.Compatibility)) + "\n")
+		if plan.BlockedReason != "" {
+			b.WriteString("  " + errorStyle().Render(textCompatdataBlockedLabel+plan.BlockedReason) + "\n")
+		}
+		b.WriteString("\n")
+	}
+	if _, ok := m.currentCompatdataPlan(); ok {
+		b.WriteString(mutedStyle.Render(textCompatdataSelectHint))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) compatdataPlanContent() string {
+	plan := m.selectedPlan
+	if plan.Library.Path == "" {
+		return titleStyle.Render(textCompatdataPlanTitle) + "\n\n" + mutedStyle.Render(textNoCompatdataPlan)
+	}
+	if m.err != nil {
+		return titleStyle.Render(textCompatdataPlanTitle) + "\n\n" + errorStyle().Render("× "+m.err.Error())
+	}
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textCompatdataPlanTitle))
+	b.WriteString("\n\n")
+	b.WriteString(textSteamLibrarySourceLabel + plan.Library.Path + "\n")
+	b.WriteString(textSteamLibraryMountLabel + plan.Library.MountPoint + "\n")
+	b.WriteString(textNTFSDeviceLabel + plan.Library.Source + "\n")
+	b.WriteString(textNTFSFilenameStatusLabel + string(plan.MountAssessment.Compatibility) + "\n")
+	if plan.MountAssessment.Driver != "" {
+		b.WriteString(textNTFSDriverLabel + plan.MountAssessment.Driver + "\n")
+	}
+	b.WriteString(textCompatdataCurrentLabel + plan.Compatdata + "\n")
+	if plan.LinkTarget != "" {
+		b.WriteString(textCompatdataExistingLinkLabel + plan.LinkTarget + "\n")
+	}
+	if plan.ImportSource != "" {
+		b.WriteString(textCompatdataImportSourceLabel + plan.ImportSource + "\n")
+	}
+	b.WriteString(textCompatdataTargetLabel + plan.NativeTarget + "\n")
+	if plan.PreservedNativeTarget != "" {
+		b.WriteString(textCompatdataPreservedLabel + plan.PreservedNativeTarget + "\n")
+	}
+	if plan.RequiresBackup || (plan.RollbackAvailable && plan.BackupPath != "") {
+		b.WriteString(textCompatdataBackupLabel + plan.BackupPath + "\n")
+	}
+	b.WriteString("\n")
+	if plan.MountAssessment.Compatibility == plugins.FilenameCompatibilityIncompatible {
+		b.WriteString(errorStyle().Render(textNTFSForcedLowercaseWarning))
+		b.WriteString("\n")
+		b.WriteString(mutedStyle.Render(textNTFSForcedLowercaseExplanation))
+		b.WriteString("\n\n")
+		if plan.MountAssessment.CanRepair {
+			b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textNTFSSessionRepairAction))
+			b.WriteString("  " + mutedStyle.Render(textNTFSSessionRepairScope))
+			b.WriteString("\n")
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(accentColor).Render(textNTFSManualAction))
+		b.WriteString("\n\n")
+	} else if plan.MountAssessment.Compatibility == plugins.FilenameCompatibilityUnknown {
+		b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render(textNTFSFilenameUnknown))
+		b.WriteString("\n\n")
+	}
+	if plan.BlockedReason != "" {
+		b.WriteString(errorStyle().Render(textCompatdataBlockedLabel + plan.BlockedReason))
+		b.WriteString("\n\n")
+		b.WriteString(mutedStyle.Render(textCompatdataCannotConfigure))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	if plan.CurrentState == plugins.CompatdataManagedLink {
+		b.WriteString(mutedStyle.Render(textCompatdataAlreadyManaged))
+		b.WriteString("\n\n")
+		if plan.RollbackAvailable {
+			b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textCompatdataRollbackAction))
+			b.WriteString("  " + mutedStyle.Render(textCompatdataRollbackSafety))
+		} else {
+			b.WriteString(mutedStyle.Render(textCompatdataNoRollback))
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+	if plan.PreservedNativeTarget != "" {
+		b.WriteString(mutedStyle.Render(textCompatdataWillRecoverRollback))
+	} else if plan.DetachesExistingLink && plan.RequiresCopy {
+		b.WriteString(mutedStyle.Render(textCompatdataWillImportLink))
+	} else if plan.DetachesExistingLink {
+		b.WriteString(mutedStyle.Render(textCompatdataWillReplaceBroken))
+	} else if plan.RequiresCopy {
+		b.WriteString(mutedStyle.Render(textCompatdataWillCopy))
+	} else {
+		b.WriteString(mutedStyle.Render(textCompatdataWillLink))
+	}
+	b.WriteString("\n\n")
+	if plan.PreservedNativeTarget != "" {
+		b.WriteString(textCompatdataRecoverySafety + "\n\n")
+	} else if plan.DetachesExistingLink {
+		b.WriteString(textCompatdataManualLinkSafety + "\n\n")
+	} else {
+		b.WriteString(textCompatdataSafety + "\n\n")
+	}
+	if plan.CurrentState == plugins.CompatdataDirectory || plan.CurrentState == plugins.CompatdataMissing ||
+		plan.CurrentState == plugins.CompatdataExternalLink || plan.CurrentState == plugins.CompatdataBrokenLink {
+		action := textCompatdataConfigureAction
+		if plan.DetachesExistingLink {
+			action = textCompatdataReplaceLinkAction
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(action))
+		b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
+	} else {
+		b.WriteString(mutedStyle.Render(textCompatdataCannotConfigure))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) compatdataSteamConfirmContent() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textCompatdataSteamConfirmTitle))
+	b.WriteString("\n\n")
+	if m.compatPending == compatdataActionRemountNTFS {
+		b.WriteString(textNTFSSteamDetected)
+	} else {
+		b.WriteString(textCompatdataSteamDetected)
+	}
+	b.WriteString("\n\n")
+	if m.compatPending == compatdataActionRemountNTFS {
+		b.WriteString(textCompatdataSteamRemountReason)
+	} else if m.compatPending == compatdataActionRestore {
+		b.WriteString(textCompatdataSteamRestoreReason)
+	} else {
+		b.WriteString(textCompatdataSteamConfigureReason)
+	}
+	b.WriteString("\n\n")
+	if m.compatPending == compatdataActionRemountNTFS {
+		b.WriteString(textNTFSSteamCloseBehavior)
+	} else {
+		b.WriteString(textCompatdataSteamCloseBehavior)
+	}
+	if m.err != nil {
+		b.WriteString("\n\n")
+		b.WriteString(errorStyle().Render("× " + m.err.Error()))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textCompatdataSteamCloseAction))
+	b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) compatdataNTFSManualContent() string {
+	plan := m.selectedPlan
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textNTFSManualTitle))
+	b.WriteString("\n\n")
+	b.WriteString(textNTFSManualIntro)
+	b.WriteString("\n\n")
+	b.WriteString(textNTFSManualDeviceLabel + plan.Library.Source + "\n")
+	b.WriteString(textNTFSManualMountLabel + plan.Library.MountPoint + "\n\n")
+	b.WriteString(textNTFSManualStepClose + "\n\n")
+	device := shellQuoteDisplayArgument(plan.Library.Source)
+	b.WriteString(mutedStyle.Render(fmt.Sprintf(textNTFSManualUnmountFormat, device)))
+	b.WriteString("\n\n")
+	b.WriteString(mutedStyle.Render(fmt.Sprintf(textNTFSManualMountFormat, device)))
+	b.WriteString("\n\n")
+	b.WriteString(textNTFSManualVerify + "\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render(textNTFSManualPersistence))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(textNTFSManualNoForce))
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render(textNTFSWindowsSystemDiskWarning))
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Bold(true).Render(textNTFSManualBazziteTitle))
+	b.WriteString("\n")
+	b.WriteString(textNTFSManualBazziteIntro)
+	b.WriteString("\n\n")
+	b.WriteString(mutedStyle.Render(textNTFSManualBazziteCommand))
+	b.WriteString("\n\n")
+	b.WriteString(textNTFSManualBazziteEdit)
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(textNTFSManualBazziteBoundary))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) compatdataNTFSResultContent() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textNTFSResultTitle))
+	b.WriteString("\n\n")
+	if m.err != nil {
+		b.WriteString(errorStyle().Render("× " + m.err.Error()))
+		b.WriteString("\n\n")
+		b.WriteString(mutedStyle.Render(textNTFSResultRecoveredMount))
+		b.WriteString("\n\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(accentColor).Render(textNTFSManualAction))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	if m.compatNTFSResult == nil {
+		return b.String() + mutedStyle.Render(textNTFSNoResult)
+	}
+	b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textNTFSResultConfigured))
+	b.WriteString("\n")
+	b.WriteString(textNTFSManualDeviceLabel + m.compatNTFSResult.Device + "\n")
+	b.WriteString(textNTFSManualMountLabel + m.compatNTFSResult.MountPoint + "\n")
+	b.WriteString(textNTFSDriverLabel + m.compatNTFSResult.After.Driver + "\n\n")
+	b.WriteString(mutedStyle.Render(textNTFSResultTemporary))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(textNTFSResultOpenSteam))
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(accentColor).Render(textNTFSManualAction))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func mountCompatibilityStyle(assessment plugins.NTFSMountAssessment) lipgloss.Style {
+	switch assessment.Compatibility {
+	case plugins.FilenameCompatibilityCompatible:
+		return lipgloss.NewStyle().Foreground(goodColor)
+	case plugins.FilenameCompatibilityIncompatible:
+		return lipgloss.NewStyle().Foreground(errorColor)
+	default:
+		return lipgloss.NewStyle().Foreground(warnColor)
+	}
+}
+
+func shellQuoteDisplayArgument(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func (m model) isSteamRunning() bool {
+	if m.steamRunning == nil {
+		return plugins.SteamRunning()
+	}
+	return m.steamRunning()
+}
+
+func (m model) compatdataResultContent() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textCompatdataResultTitle))
+	b.WriteString("\n\n")
+	if m.err != nil {
+		b.WriteString(errorStyle().Render("× " + m.err.Error()))
+		return b.String()
+	}
+	if m.compatResult == nil {
+		return b.String() + mutedStyle.Render(textNoCompatdataResult)
+	}
+	plan := m.compatResult.Plan
+	if m.compatRolledBack {
+		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textCompatdataRolledBack))
+	} else if m.compatResult.TransactionID == "" {
+		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textCompatdataAlreadyConfigured))
+	} else {
+		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textCompatdataConfigured))
+	}
+	b.WriteString("\n")
+	b.WriteString(textCompatdataSourceLabel + plan.Compatdata + "\n")
+	b.WriteString(textCompatdataTargetLabel + plan.NativeTarget + "\n")
+	if plan.PreservedNativeTarget != "" {
+		b.WriteString(textCompatdataPreservedLabel + plan.PreservedNativeTarget + "\n")
+	}
+	if m.compatResult.TransactionID != "" {
+		b.WriteString(textTransactionLabel + m.compatResult.TransactionID + "\n")
+	}
+	b.WriteString("\n")
+	if m.compatRolledBack {
+		b.WriteString(mutedStyle.Render(textCompatdataRollbackResultHint))
+	} else if plan.PreservedNativeTarget != "" {
+		b.WriteString(mutedStyle.Render(textCompatdataRecoveryResultHint))
+	} else if plan.DetachesExistingLink {
+		b.WriteString(mutedStyle.Render(textCompatdataManualResultHint))
+	} else {
+		b.WriteString(mutedStyle.Render(textCompatdataResultHint))
+	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -796,6 +1693,31 @@ func latestRestorable(history []transaction.Journal) *transaction.Journal {
 	return nil
 }
 
+func (m model) currentSteamGame() (plugins.SteamGame, bool) {
+	if m.gameCursor < 0 || m.gameCursor >= len(m.steamGames) {
+		return plugins.SteamGame{}, false
+	}
+	return m.steamGames[m.gameCursor], true
+}
+
+func (m model) currentCompatdataPlan() (plugins.CompatdataPlan, bool) {
+	if m.compatCursor < 0 || m.compatCursor >= len(m.compatPlans) {
+		return plugins.CompatdataPlan{}, false
+	}
+	return m.compatPlans[m.compatCursor], true
+}
+
+func gameEngineLabel(engine plugins.GameEngine) string {
+	switch engine {
+	case plugins.GameEngineUnreal:
+		return textDetectedEngineUnreal
+	case plugins.GameEngineUnity:
+		return textDetectedEngineUnity
+	default:
+		return textDetectedEngineUnknown
+	}
+}
+
 func compactHash(value string) string {
 	if len(value) <= 24 {
 		return value
@@ -938,6 +1860,104 @@ func uninstallBundle(ctx context.Context) tea.Cmd {
 		var output bytes.Buffer
 		result, err := installer.Uninstall(ctx, source, env, installer.Options{Output: &output})
 		return uninstallMsg{result: result, log: output.String(), err: err}
+	}
+}
+
+func scanSteamGames() tea.Cmd {
+	return func() tea.Msg {
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return steamGamesMsg{err: err}
+		}
+		games, err := plugins.DiscoverSteamGames(env)
+		return steamGamesMsg{games: games, err: err}
+	}
+}
+
+func scanCompatdata() tea.Cmd {
+	return func() tea.Msg {
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return compatdataMsg{err: err}
+		}
+		libraries, err := plugins.DiscoverSteamLibraries(env)
+		if err != nil {
+			return compatdataMsg{err: err}
+		}
+		plans := make([]plugins.CompatdataPlan, 0, len(libraries))
+		for _, library := range libraries {
+			plan, planErr := plugins.PlanCompatdataMigration(env, library)
+			if planErr != nil {
+				return compatdataMsg{err: planErr}
+			}
+			plans = append(plans, plan)
+		}
+		return compatdataMsg{plans: plans}
+	}
+}
+
+func runCompatdataOperation(plan plugins.CompatdataPlan, action compatdataPendingAction) tea.Cmd {
+	return func() tea.Msg {
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return compatdataApplyMsg{err: err}
+		}
+		if action == compatdataActionRestore {
+			result, err := plugins.RollbackLatestCompatdataMigration(env, plan.Library)
+			return compatdataApplyMsg{result: result, rolledBack: true, err: err}
+		}
+		result, err := plugins.ApplyCompatdataMigration(env, plan)
+		return compatdataApplyMsg{result: result, err: err}
+	}
+}
+
+func closeSteamForCompatdata(ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		return compatdataSteamClosedMsg{err: plugins.CloseSteam(ctx)}
+	}
+}
+
+func repairNTFSMount(ctx context.Context, plan plugins.CompatdataPlan) tea.Cmd {
+	return func() tea.Msg {
+		result, err := plugins.RepairNTFSFilenameCompatibility(ctx, plan.Library)
+		if err != nil {
+			return compatdataNTFSRepairMsg{result: result, plan: plan, err: err}
+		}
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return compatdataNTFSRepairMsg{result: result, plan: plan, err: err}
+		}
+		freshPlan, err := plugins.PlanCompatdataMigration(env, plan.Library)
+		return compatdataNTFSRepairMsg{result: result, plan: freshPlan, err: err}
+	}
+}
+
+func analyzePlatformAssetOverride(game plugins.SteamGame) tea.Cmd {
+	return func() tea.Msg {
+		analysis, err := plugins.AnalyzePlatformAssetOverride(game)
+		return assetOverrideAnalysisMsg{analysis: analysis, err: err}
+	}
+}
+
+func fixPlatformAssetOverride(game plugins.SteamGame) tea.Cmd {
+	return func() tea.Msg {
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return assetOverrideFixMsg{err: err}
+		}
+		fix, err := plugins.FixPlatformAssetOverride(env, game)
+		return assetOverrideFixMsg{fix: fix, err: err}
+	}
+}
+
+func undoPlatformAssetOverrideFix(game plugins.SteamGame) tea.Cmd {
+	return func() tea.Msg {
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return assetOverrideFixMsg{err: err}
+		}
+		fix, err := plugins.UndoPlatformAssetOverrideFix(env, game)
+		return assetOverrideFixMsg{fix: fix, err: err}
 	}
 }
 

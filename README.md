@@ -15,6 +15,7 @@ Created by [YlanzinhoY](https://github.com/YlanzinhoY) as an independent communi
 - Persistent snapshots and automatic recovery on failure.
 - Rollback that restores the previous state and restarts Steam.
 - Complete LuaTools removal without deleting Steam or games.
+- Community plugins, starting with a safe alias for an existing Steam library on a mounted NTFS disk.
 
 ## Goals
 
@@ -82,6 +83,8 @@ A good first run is:
 
 Use **Undo last installation** to restore the exact previous snapshot. Use **Remove LuaTools completely** when you want to remove the full LuaTools, Lumen, and slsteam-moon user integration. Neither action deletes games.
 
+**Selene Plugins** includes **Shared Steam library (NTFS)**. It finds an existing Steam library on an already-mounted Windows game disk and, after confirmation, creates a user-only symbolic link. It never mounts disks, changes games, or edits Steam's settings; add the created link in Steam's **Settings → Storage** when needed.
+
 ## Safety
 
 Selene does not execute the mutable LuaTools installer from `main`. It downloads exact release artifacts over HTTPS, verifies their expected size and SHA-256 digest, inspects archives, and stages files privately.
@@ -123,7 +126,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before changing code, copy, catalogs, or 
 - [x] Automatic Steam restart after rollback.
 - [x] Transactional complete removal.
 - [x] TUI-only operational interface.
-- [x] Real CachyOS hardware validation.
+- [x] 100% compatibility with Selene's supported native Steam workflows on CachyOS and Bazzite.
 - [ ] Signed catalog and releases.
 - [ ] Native Flatpak Steam support.
 - [ ] Snapshot retention policy.
