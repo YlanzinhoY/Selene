@@ -35,6 +35,10 @@ type CompatdataPlan struct {
 	Library      SteamLibrary
 	Compatdata   string
 	NativeTarget string
+	// MountAssessment is independent from the compatdata link. It reports
+	// whether the active NTFS mount preserves the filename spelling installed
+	// by Steam, which some games require for assets and integrity metadata.
+	MountAssessment NTFSMountAssessment `json:"-"`
 	// PreservedNativeTarget is populated when a previous rollback left data at
 	// the deterministic target. Apply atomically moves that data here before
 	// starting a fresh migration, so recovery never requires manual cleanup.
@@ -185,12 +189,13 @@ func PlanCompatdataMigration(env planner.Environment, library SteamLibrary) (Com
 	}
 
 	plan := CompatdataPlan{
-		Library:      library,
-		Compatdata:   CompatdataPath(library),
-		NativeTarget: nativeTargetPath(env, library),
-		BackupPath:   availableBackupPath(library),
-		CurrentState: state,
-		LinkTarget:   linkTarget,
+		Library:         library,
+		Compatdata:      CompatdataPath(library),
+		NativeTarget:    nativeTargetPath(env, library),
+		MountAssessment: InspectNTFSFilenameCompatibility(library),
+		BackupPath:      availableBackupPath(library),
+		CurrentState:    state,
+		LinkTarget:      linkTarget,
 	}
 
 	switch state {
