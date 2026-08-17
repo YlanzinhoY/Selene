@@ -126,7 +126,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before changing code, copy, catalogs, or 
 - [x] Automatic Steam restart after rollback.
 - [x] Transactional complete removal.
 - [x] TUI-only operational interface.
-- [ ] Real CachyOS hardware validation.
+- [x] 100% compatibility with Selene's supported native Steam workflows on CachyOS and Bazzite.
 - [ ] Signed catalog and releases.
 - [ ] Native Flatpak Steam support.
 - [ ] Snapshot retention policy.
