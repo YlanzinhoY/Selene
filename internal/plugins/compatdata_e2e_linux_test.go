@@ -43,6 +43,7 @@ func TestCompatdataE2EMigrateAndRollbackConfiguredNTFSLibrary(t *testing.T) {
 	}
 	assertCompatdataLink(t, result.Plan.Compatdata, result.Plan.NativeTarget)
 	assertFile(t, filepath.Join(result.Plan.NativeTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
+	assertLinkTarget(t, filepath.Join(result.Plan.NativeTarget, "620", "pfx", "dosdevices", "c:"), "../drive_c")
 	if info, statErr := os.Lstat(result.Plan.BackupPath); statErr != nil || !info.IsDir() {
 		t.Fatalf("original NTFS compatdata backup = %v, %v", info, statErr)
 	}
@@ -106,6 +107,160 @@ func TestCompatdataE2ERollsBackExistingManagedLinkWithLegacyBackup(t *testing.T)
 	}
 }
 
+func TestCompatdataE2EImportsManualLinkAndRestoresItOnRollback(t *testing.T) {
+	if steamRunning() {
+		t.Skip("Steam is running; compatdata migration deliberately refuses to mutate while it is open")
+	}
+	fixture := newCompatdataE2EFixture(t)
+	compatdata := CompatdataPath(fixture.library)
+	manualTarget := filepath.Join(fixture.env.Home, "manual-compatdata")
+	if err := os.MkdirAll(fixture.env.Home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(compatdata, manualTarget); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(manualTarget, compatdata); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanCompatdataMigration(fixture.env, fixture.library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CurrentState != CompatdataExternalLink || !plan.DetachesExistingLink ||
+		!plan.RequiresCopy || plan.RequiresBackup || plan.ImportSource != manualTarget || plan.BlockedReason != "" {
+		t.Fatalf("manual-link plan = %#v", plan)
+	}
+
+	result, err := ApplyCompatdataMigration(fixture.env, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCompatdataLink(t, compatdata, result.Plan.NativeTarget)
+	assertFile(t, filepath.Join(result.Plan.NativeTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
+	assertLinkTarget(t, filepath.Join(result.Plan.NativeTarget, "620", "pfx", "dosdevices", "c:"), "../drive_c")
+	assertFile(t, filepath.Join(manualTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
+
+	managedPlan, err := PlanCompatdataMigration(fixture.env, fixture.library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managedPlan.CurrentState != CompatdataManagedLink || !managedPlan.RollbackAvailable {
+		t.Fatalf("managed manual-link plan = %#v", managedPlan)
+	}
+
+	if _, err := RollbackLatestCompatdataMigration(fixture.env, fixture.library); err != nil {
+		t.Fatal(err)
+	}
+	assertCompatdataLink(t, compatdata, manualTarget)
+	assertFile(t, filepath.Join(manualTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
+	assertFile(t, filepath.Join(result.Plan.NativeTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
+}
+
+func TestCompatdataE2EReplacesBrokenManualLinkAndRestoresItOnRollback(t *testing.T) {
+	if steamRunning() {
+		t.Skip("Steam is running; compatdata migration deliberately refuses to mutate while it is open")
+	}
+	fixture := newCompatdataE2EFixture(t)
+	compatdata := CompatdataPath(fixture.library)
+	brokenTarget := filepath.Join(fixture.env.Home, "missing-compatdata")
+	if err := os.RemoveAll(compatdata); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(brokenTarget, compatdata); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanCompatdataMigration(fixture.env, fixture.library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CurrentState != CompatdataBrokenLink || !plan.DetachesExistingLink || plan.RequiresCopy || plan.BlockedReason != "" {
+		t.Fatalf("broken-link plan = %#v", plan)
+	}
+	result, err := ApplyCompatdataMigration(fixture.env, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCompatdataLink(t, compatdata, result.Plan.NativeTarget)
+
+	if _, err := RollbackLatestCompatdataMigration(fixture.env, fixture.library); err != nil {
+		t.Fatal(err)
+	}
+	readTarget, err := os.Readlink(compatdata)
+	if err != nil || readTarget != brokenTarget {
+		t.Fatalf("restored broken link target = %q, %v; want %q", readTarget, err, brokenTarget)
+	}
+	if _, err := filepath.EvalSymlinks(compatdata); err == nil {
+		t.Fatal("rollback should restore the original broken link exactly")
+	}
+}
+
+func TestFindMountForResolvedPathUsesPhysicalExistingAncestor(t *testing.T) {
+	root := t.TempDir()
+	physicalHome := filepath.Join(root, "var", "home")
+	userHome := filepath.Join(physicalHome, "player")
+	if err := os.MkdirAll(userHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logicalHome := filepath.Join(root, "home")
+	if err := os.Symlink(physicalHome, logicalHome); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(logicalHome, "player", ".local", "share", "selene", "steam-compatdata", "new-target")
+	mounts := []mount{
+		{point: root, filesystem: "ostree", readOnly: true},
+		{point: physicalHome, filesystem: "ext4"},
+	}
+
+	found, ok, err := findMountForResolvedPath(mounts, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || found.point != physicalHome || found.readOnly {
+		t.Fatalf("resolved target mount = %#v, ok=%v", found, ok)
+	}
+	resolved, err := resolvePathForMount(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(physicalHome, "player", ".local", "share", "selene", "steam-compatdata", "new-target")
+	if resolved != want {
+		t.Fatalf("resolved target = %q, want %q", resolved, want)
+	}
+}
+
+func TestCompatdataPlanBlocksPhysicalOverlapThroughLogicalHomeLink(t *testing.T) {
+	fixture := newCompatdataE2EFixture(t)
+	compatdata := CompatdataPath(fixture.library)
+	root := filepath.Dir(fixture.env.Home)
+	physicalHome := filepath.Join(root, "var", "home", "player")
+	manualTarget := filepath.Join(physicalHome, "manual-compatdata")
+	if err := os.MkdirAll(physicalHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(compatdata, manualTarget); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(manualTarget, compatdata); err != nil {
+		t.Fatal(err)
+	}
+	logicalHome := filepath.Join(root, "logical-home")
+	if err := os.Symlink(physicalHome, logicalHome); err != nil {
+		t.Fatal(err)
+	}
+	fixture.env.XDGDataHome = filepath.Join(logicalHome, "manual-compatdata", "selene-data")
+
+	plan, err := PlanCompatdataMigration(fixture.env, fixture.library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.BlockedReason != "the existing compatdata link target overlaps Selene's native target" {
+		t.Fatalf("overlap blocker = %q", plan.BlockedReason)
+	}
+}
+
 type compatdataE2EFixture struct {
 	env     planner.Environment
 	mounts  []mount
@@ -129,6 +284,13 @@ func newCompatdataE2EFixture(t *testing.T) compatdataE2EFixture {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(prefixFile, []byte("original prefix"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dosdevices := filepath.Join(compatdata, "620", "pfx", "dosdevices")
+	if err := os.MkdirAll(dosdevices, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../drive_c", filepath.Join(dosdevices, "c:")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -188,5 +350,13 @@ func assertFile(t *testing.T, path, want string) {
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != want {
 		t.Fatalf("file %s = %q, %v; want %q", path, data, err, want)
+	}
+}
+
+func assertLinkTarget(t *testing.T, path, want string) {
+	t.Helper()
+	target, err := os.Readlink(path)
+	if err != nil || target != want {
+		t.Fatalf("link %s = %q, %v; want %q", path, target, err, want)
 	}
 }
