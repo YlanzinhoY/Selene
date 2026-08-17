@@ -17,16 +17,28 @@ const (
 	textActivityInstall         = "Installing with an active snapshot. Do not close Selene..."
 	textActivityRollback        = "Restoring the snapshot and restarting Steam. Do not close Selene..."
 	textActivityRemove          = "Removing with a safety snapshot. Do not close Selene..."
+	textActivitySteamLibraries  = "Scanning mounted NTFS disks for Steam libraries..."
+	textActivityCreateSteamLink = "Creating the symbolic link with a safety snapshot..."
+	textActivityRemoveSteamLink = "Removing the symbolic link with a safety snapshot..."
+	textActivitySteamGames      = "Scanning Steam libraries and linked game folders..."
+	textActivityAnalyzeGame     = "Inspecting the selected game without changing its files..."
 
-	textFooterHome            = "↑/↓ navigate  •  enter select  •  esc back  •  q quit"
-	textFooterDoctor          = "↑/↓ scroll  •  r check again  •  esc back  •  q quit"
-	textFooterDetails         = "↑/↓ scroll  •  r refresh  •  esc back  •  q quit"
-	textFooterFetch           = "↑/↓ scroll  •  r verify cache  •  esc back  •  q quit"
-	textFooterInstallConfirm  = "↑/↓ scroll  •  i install  •  esc cancel"
-	textFooterRollbackConfirm = "↑/↓ scroll  •  d restore  •  esc cancel"
-	textFooterRemoveConfirm   = "↑/↓ scroll  •  x remove completely  •  esc cancel"
-	textFooterResult          = "↑/↓ scroll  •  esc back  •  q quit"
-	textFooterTransaction     = "Transaction in progress • wait for commit or automatic rollback"
+	textFooterHome                         = "↑/↓ navigate  •  enter select  •  esc back  •  q quit"
+	textFooterDoctor                       = "↑/↓ scroll  •  r check again  •  esc back  •  q quit"
+	textFooterDetails                      = "↑/↓ scroll  •  r refresh  •  esc back  •  q quit"
+	textFooterFetch                        = "↑/↓ scroll  •  r verify cache  •  esc back  •  q quit"
+	textFooterInstallConfirm               = "↑/↓ scroll  •  i install  •  esc cancel"
+	textFooterRollbackConfirm              = "↑/↓ scroll  •  d restore  •  esc cancel"
+	textFooterRemoveConfirm                = "↑/↓ scroll  •  x remove completely  •  esc cancel"
+	textFooterPlugins                      = "↑/↓ navigate  •  enter select  •  esc back  •  q quit"
+	textFooterSteamLibraries               = "↑/↓ select  •  enter add link  •  r remove link  •  esc back"
+	textFooterSteamLibraryConfirm          = "↑/↓ scroll  •  l create link  •  esc cancel"
+	textFooterSteamLibraryRemove           = "↑/↓ scroll  •  x remove link  •  esc cancel"
+	textFooterPluginResult                 = "↑/↓ scroll  •  esc back  •  q quit"
+	textFooterPlatformAssetOverride        = "↑/↓ select  •  enter inspect  •  esc back"
+	textFooterPlatformAssetOverrideDetails = "↑/↓ scroll  •  esc back  •  q quit"
+	textFooterResult                       = "↑/↓ scroll  •  esc back  •  q quit"
+	textFooterTransaction                  = "Transaction in progress • wait for commit or automatic rollback"
 
 	textNoDiagnostics       = "No diagnostic has been run yet."
 	textDoctorTitle         = "Environment check"
@@ -93,6 +105,55 @@ const (
 	textSafetyTransactionLabel = "Safety transaction: "
 	textNothingRemoved         = "No managed installation was found; nothing changed."
 
+	textPluginsTitle               = "Selene Plugins"
+	textSteamLibraryTitle          = "Shared Steam library"
+	textSteamLibraryIntro          = "Selene found existing Steam libraries on mounted NTFS disks. Add a user-only link for one library, or remove a link previously managed by Selene."
+	textNoSteamLibraries           = "No Steam libraries or managed links were found."
+	textSteamLibraryMountHint      = "Mount the Windows game disk first, then return here to scan it again."
+	textSteamLibraryAddLabel       = "Add symbolic link"
+	textSteamLibraryManagedLabel   = "Managed symbolic link"
+	textSteamLibraryMetadataFormat = "%s · mounted at %s"
+	textSteamLibrarySelectHint     = "Press Enter to review the selected link before Selene creates it."
+	textSteamLibraryRemoveHint     = "Press r to review removal. Selene removes only the link, never the games."
+	textSteamLibraryConfirmTitle   = "Confirm shared Steam library link"
+	textNoSteamLibrarySelected     = "No Steam library was selected."
+	textNoSteamLibraryLinkSelected = "No managed symbolic link was selected."
+	textSteamLibraryConfirmIntro   = "Selene will create a symbolic link to this existing Steam library."
+	textSteamLibrarySourceLabel    = "Library: "
+	textSteamLibraryMountLabel     = "Mounted disk: "
+	textSteamLibraryLinkLabel      = "Selene link: "
+	textSteamLibrarySafety         = "The NTFS disk, its games, and Steam's configuration are not changed. A transaction records the previous path before the link is created."
+	textSteamLibrarySteamHint      = "Afterward, add the Selene link in Steam Settings → Storage if Steam has not already found this library."
+	textSteamLibraryConfirmAction  = "Press l to create the symbolic link."
+	textSteamLibraryRemoveTitle    = "Remove shared Steam library link"
+	textSteamLibraryRemoveSafety   = "Only this symbolic link will be removed. The NTFS disk, games, and Steam configuration remain unchanged."
+	textSteamLibraryRemoveAction   = "Press x to remove the symbolic link."
+	textSteamLibraryResultTitle    = "Shared Steam library result"
+	textNoSteamLibraryResult       = "No link operation result is available."
+	textSteamLibraryLinked         = "✓ Shared Steam library link created"
+	textSteamLibraryAlreadyLinked  = "✓ This shared Steam library is already linked"
+	textSteamLibraryRemoved        = "✓ Shared Steam library link removed"
+	textSteamLibraryResultHint     = "You can return to Selene Plugins at any time to add or remove a managed link."
+
+	textPlatformAssetOverrideTitle         = "Fix PlatformAssetOverrides"
+	textPlatformAssetOverrideIntro         = "Choose a Steam-managed game to inspect for Unreal, Unity, and PlatformAssetOverrides files. This inspection does not change game files."
+	textNoSteamGames                       = "No installed Steam games were found in the configured or Selene-linked libraries."
+	textSteamGameMetadataFormat            = "App %s · library: %s"
+	textPlatformAssetOverrideSelectHint    = "Press Enter to inspect the selected game before any repair is considered."
+	textPlatformAssetOverrideAnalysisTitle = "PlatformAssetOverrides analysis"
+	textNoPlatformAssetOverrideAnalysis    = "No game analysis is available."
+	textSteamGamePathLabel                 = "Game: "
+	textDetectedEngineLabel                = "Detected engine: "
+	textDetectedEngineUnreal               = "Unreal Engine"
+	textDetectedEngineUnity                = "Unity"
+	textDetectedEngineUnknown              = "not identified"
+	textPlatformPluginFound                = "! PlatformAssetOverrides plugin descriptor found"
+	textPlatformPluginReferenced           = "! PlatformAssetOverrides is referenced by the game project"
+	textPlatformPluginNotFound             = "No PlatformAssetOverrides descriptor or project reference was found."
+	textUnityAssetsFound                   = "Unity resources.assets file(s) found:"
+	textPlatformAssetOverrideSafety        = "Selene did not replace assets, disable a plugin, or add a module. A missing Unreal module needs a game-version-compatible repair; a generic asset link would be unsafe."
+	textPlatformAssetOverrideVerifyHint    = "First use Steam Properties → Installed Files → Verify integrity. Selene can automate a repair only after its exact compatible source is known."
+
 	textAboutTitle  = "About Selene"
 	textAboutBody   = "Selene is an independent community manager that makes the\nLuaTools ecosystem accessible on Linux. Its priority is to install,\ncheck, update, undo, and remove changes safely."
 	textAboutState  = "Current state: transactional user-only install, rollback, and complete removal."
@@ -106,10 +167,20 @@ var textHomeMenu = []menuItem{
 	{title: "Install LuaTools", description: "Use verified sources with an automatic snapshot and rollback"},
 	{title: "Undo last installation", description: "Restore the exact previous state and restart Steam"},
 	{title: "Remove LuaTools completely", description: "Remove LuaTools, Lumen, and slsteam-moon from your user account"},
+	{title: "Selene Plugins", description: "Explore optional community tools that remain safe and user-scoped"},
 	{title: "About Selene", description: "Learn about the project's mission and current status"},
 	{title: "Exit", description: "Close the interface"},
 }
 
 func defaultMenuItems() []menuItem {
 	return append([]menuItem(nil), textHomeMenu...)
+}
+
+var textPluginMenu = []menuItem{
+	{title: "Shared Steam library (NTFS)", description: "Link a mounted Windows Steam library without changing its games"},
+	{title: "Fix PlatformAssetOverrides", description: "Find a Steam game and inspect this Unreal or Unity compatibility error"},
+}
+
+func defaultPluginItems() []menuItem {
+	return append([]menuItem(nil), textPluginMenu...)
 }
