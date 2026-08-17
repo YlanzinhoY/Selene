@@ -2,8 +2,6 @@
 package plugins
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -16,8 +14,6 @@ import (
 	"github.com/selene-linux/selene/internal/transaction"
 )
 
-const steamLibraryPluginID = "steam-library"
-
 // SteamLibrary is an existing Steam library found on a mounted NTFS volume.
 // Path is the directory that contains steamapps, not steamapps itself.
 type SteamLibrary struct {
@@ -25,19 +21,6 @@ type SteamLibrary struct {
 	MountPoint string
 	Source     string
 	Filesystem string
-}
-
-// Link is a symbolic link managed by the Steam library plugin.
-type Link struct {
-	Path   string
-	Target string
-}
-
-// Result records the committed transaction for a link creation or removal.
-type Result struct {
-	Link          Link
-	TransactionID string
-	JournalPath   string
 }
 
 type mount struct {
@@ -50,7 +33,7 @@ type mount struct {
 // volumes. It only reads the mount table and directory metadata.
 func DiscoverSteamLibraries(env planner.Environment) ([]SteamLibrary, error) {
 	if runtime.GOOS != "linux" || env.OS != "linux" {
-		return nil, errors.New("the shared Steam library plugin is supported only on Linux")
+		return nil, errors.New("the shared Steam library feature is supported only on Linux")
 	}
 	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
@@ -61,132 +44,6 @@ func DiscoverSteamLibraries(env planner.Environment) ([]SteamLibrary, error) {
 		return nil, err
 	}
 	return discoverSteamLibraries(mounts), nil
-}
-
-// ManagedLinks lists only direct symbolic links in Selene's plugin directory.
-// Broken links are deliberately retained in the list so users can remove them.
-func ManagedLinks(env planner.Environment) ([]Link, error) {
-	directory := linksDirectory(env)
-	entries, err := os.ReadDir(directory)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("list managed Steam library links: %w", err)
-	}
-
-	links := make([]Link, 0, len(entries))
-	for _, entry := range entries {
-		path := filepath.Join(directory, entry.Name())
-		info, err := os.Lstat(path)
-		if err != nil {
-			return nil, fmt.Errorf("inspect managed Steam library link %s: %w", path, err)
-		}
-		if info.Mode()&os.ModeSymlink == 0 {
-			continue
-		}
-		target, err := os.Readlink(path)
-		if err != nil {
-			return nil, fmt.Errorf("read managed Steam library link %s: %w", path, err)
-		}
-		links = append(links, Link{Path: path, Target: target})
-	}
-	sort.Slice(links, func(i, j int) bool { return links[i].Path < links[j].Path })
-	return links, nil
-}
-
-// CreateSteamLibraryLink creates a user-owned alias for a discovered library.
-// The mounted volume is never changed. Any failure restores the prior path.
-func CreateSteamLibraryLink(env planner.Environment, library SteamLibrary) (Result, error) {
-	if err := validateEnvironment(env); err != nil {
-		return Result{}, err
-	}
-	if err := validateLibrary(library); err != nil {
-		return Result{}, err
-	}
-
-	link := PlannedSteamLibraryLink(env, library)
-	if info, err := os.Lstat(link.Path); err == nil {
-		if info.Mode()&os.ModeSymlink == 0 {
-			return Result{}, fmt.Errorf("refusing to replace non-link path %s", link.Path)
-		}
-		target, readErr := os.Readlink(link.Path)
-		if readErr != nil {
-			return Result{}, fmt.Errorf("read existing link %s: %w", link.Path, readErr)
-		}
-		if filepath.Clean(target) == filepath.Clean(link.Target) {
-			return Result{Link: Link{Path: link.Path, Target: target}}, nil
-		}
-		return Result{}, fmt.Errorf("refusing to replace existing link %s", link.Path)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return Result{}, fmt.Errorf("inspect link destination %s: %w", link.Path, err)
-	}
-
-	if err := os.MkdirAll(linksDirectory(env), 0o700); err != nil {
-		return Result{}, fmt.Errorf("create plugin link directory: %w", err)
-	}
-	tx, err := transaction.Begin(stateRoot(env), "plugin steam-library link "+link.Target, []transaction.Target{{Path: link.Path}}, nil)
-	if err != nil {
-		return Result{}, fmt.Errorf("create link safety snapshot: %w", err)
-	}
-	if err := os.Symlink(link.Target, link.Path); err != nil {
-		return Result{}, abort(tx, fmt.Errorf("create symbolic link %s: %w", link.Path, err))
-	}
-	if err := tx.Commit(); err != nil {
-		return Result{}, abort(tx, fmt.Errorf("commit link transaction: %w", err))
-	}
-	return Result{
-		Link:          link,
-		TransactionID: tx.Journal.ID,
-		JournalPath:   filepath.Join(tx.Journal.Root, "journal.json"),
-	}, nil
-}
-
-// PlannedSteamLibraryLink returns the Selene-managed destination for a
-// discovered library. It does not create directories or modify files.
-func PlannedSteamLibraryLink(env planner.Environment, library SteamLibrary) Link {
-	return Link{
-		Path:   filepath.Join(linksDirectory(env), libraryLinkName(library)),
-		Target: library.Path,
-	}
-}
-
-// RemoveSteamLibraryLink removes exactly one Selene-managed symbolic link. It
-// never follows the link or changes the mounted library it points to.
-func RemoveSteamLibraryLink(env planner.Environment, link Link) (Result, error) {
-	if err := validateEnvironment(env); err != nil {
-		return Result{}, err
-	}
-	if err := validateManagedLink(env, link.Path); err != nil {
-		return Result{}, err
-	}
-	info, err := os.Lstat(link.Path)
-	if err != nil {
-		return Result{}, fmt.Errorf("inspect managed Steam library link %s: %w", link.Path, err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		return Result{}, fmt.Errorf("refusing to remove non-link path %s", link.Path)
-	}
-	target, err := os.Readlink(link.Path)
-	if err != nil {
-		return Result{}, fmt.Errorf("read managed Steam library link %s: %w", link.Path, err)
-	}
-
-	tx, err := transaction.Begin(stateRoot(env), "plugin steam-library unlink "+link.Path, []transaction.Target{{Path: link.Path}}, nil)
-	if err != nil {
-		return Result{}, fmt.Errorf("create removal safety snapshot: %w", err)
-	}
-	if err := os.Remove(link.Path); err != nil {
-		return Result{}, abort(tx, fmt.Errorf("remove symbolic link %s: %w", link.Path, err))
-	}
-	if err := tx.Commit(); err != nil {
-		return Result{}, abort(tx, fmt.Errorf("commit removal transaction: %w", err))
-	}
-	return Result{
-		Link:          Link{Path: link.Path, Target: target},
-		TransactionID: tx.Journal.ID,
-		JournalPath:   filepath.Join(tx.Journal.Root, "journal.json"),
-	}, nil
 }
 
 func parseMountInfo(data []byte) ([]mount, error) {
@@ -352,10 +209,10 @@ func decodeMountField(value string) (string, error) {
 
 func validateEnvironment(env planner.Environment) error {
 	if runtime.GOOS != "linux" || env.OS != "linux" {
-		return errors.New("the shared Steam library plugin is supported only on Linux")
+		return errors.New("the shared Steam library feature is supported only on Linux")
 	}
 	if !filepath.IsAbs(env.XDGDataHome) || !filepath.IsAbs(env.XDGStateHome) {
-		return errors.New("the shared Steam library plugin requires absolute XDG paths")
+		return errors.New("the shared Steam library feature requires absolute XDG paths")
 	}
 	return nil
 }
@@ -373,43 +230,12 @@ func validateLibrary(library SteamLibrary) error {
 	return nil
 }
 
-func validateManagedLink(env planner.Environment, path string) error {
-	if !filepath.IsAbs(path) {
-		return errors.New("the managed link path must be absolute")
-	}
-	parent := linksDirectory(env)
-	if filepath.Clean(filepath.Dir(path)) != filepath.Clean(parent) {
-		return errors.New("refusing to remove a link outside Selene's plugin directory")
-	}
-	return nil
-}
-
-func linksDirectory(env planner.Environment) string {
-	return filepath.Join(env.XDGDataHome, "selene", "plugins", steamLibraryPluginID)
-}
-
 func stateRoot(env planner.Environment) string {
 	return filepath.Join(env.XDGStateHome, "selene")
 }
 
-func libraryLinkName(library SteamLibrary) string {
-	label := strings.ToLower(filepath.Base(filepath.Clean(library.MountPoint)))
-	var clean strings.Builder
-	for _, character := range label {
-		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') {
-			clean.WriteRune(character)
-		} else {
-			clean.WriteByte('-')
-		}
-	}
-	label = strings.Trim(clean.String(), "-")
-	if label == "" || label == "." {
-		label = "steam-library"
-	}
-	digest := sha256.Sum256([]byte(filepath.Clean(library.Path)))
-	return label + "-" + hex.EncodeToString(digest[:4])
-}
-
+// abort marks a transaction failed and rolls it back, reporting the original
+// cause unless the rollback itself also failed.
 func abort(tx *transaction.Transaction, cause error) error {
 	_ = tx.MarkFailed(cause)
 	if rollbackErr := tx.Rollback(); rollbackErr != nil {

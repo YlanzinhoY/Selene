@@ -243,14 +243,6 @@ func steamLibraryDirectories(env planner.Environment) ([]string, error) {
 			add(library)
 		}
 	}
-
-	links, err := ManagedLinks(env)
-	if err != nil {
-		return nil, err
-	}
-	for _, link := range links {
-		add(link.Path)
-	}
 	sort.Strings(libraries)
 	return libraries, nil
 }
