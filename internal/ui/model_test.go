@@ -258,11 +258,154 @@ func TestCompatdataRestoreRequestsSteamConfirmationWhenRunning(t *testing.T) {
 	}
 }
 
+func TestCompatdataPlanWarnsAboutForcedLowercaseMount(t *testing.T) {
+	m := model{selectedPlan: incompatibleNTFSPlan()}
+	content := m.compatdataPlanContent()
+	for _, expected := range []string{
+		"forces Steam filenames to lowercase",
+		"scripts, textures, or assets",
+		"Fix filename handling for this session",
+		"Show manual steps",
+		"temporary",
+	} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("NTFS warning does not mention %q: %q", expected, content)
+		}
+	}
+}
+
+func TestCompatdataWarnsAgainstWindowsSystemPartition(t *testing.T) {
+	m := model{}
+	content := m.compatdataContent()
+	for _, expected := range []string{
+		"intended only for dual-boot users",
+		"share a game library between Windows and Linux",
+		"Btrfs or Ext4",
+		"does not recommend",
+		"Windows system partition",
+		"usually C:",
+		"separate partition dedicated to games",
+	} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("compatdata screen does not mention %q: %q", expected, content)
+		}
+	}
+}
+
+func TestNTFSRepairRequestsSteamConfirmationWhenRunning(t *testing.T) {
+	m := newModel()
+	defer m.cancel()
+	m.screen = screenCompatdataPlan
+	m.selectedPlan = incompatibleNTFSPlan()
+	m.steamRunning = func() bool { return true }
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	got := updated.(model)
+	if cmd != nil || got.screen != screenCompatdataSteamConfirm || got.compatPending != compatdataActionRemountNTFS {
+		t.Fatalf("repair confirmation = screen %v, pending %v, cmd %v", got.screen, got.compatPending, cmd)
+	}
+	content := got.compatdataSteamConfirmContent()
+	for _, expected := range []string{"will not unmount a game disk", "temporarily remounts", "without force"} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("repair confirmation does not mention %q: %q", expected, content)
+		}
+	}
+}
+
+func TestNTFSRepairStartsDirectlyWhenSteamIsClosed(t *testing.T) {
+	m := newModel()
+	defer m.cancel()
+	m.screen = screenCompatdataPlan
+	m.selectedPlan = incompatibleNTFSPlan()
+	m.steamRunning = func() bool { return false }
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	got := updated.(model)
+	if cmd == nil || !got.checking || !got.mutating || got.compatPending != compatdataActionRemountNTFS || got.activity != textActivityRepairNTFSMount {
+		t.Fatalf("repair transition = checking %v, mutating %v, pending %v, activity %q, cmd %v", got.checking, got.mutating, got.compatPending, got.activity, cmd)
+	}
+}
+
+func TestSteamCloseSuccessContinuesPendingNTFSRepair(t *testing.T) {
+	m := newModel()
+	defer m.cancel()
+	m.screen = screenCompatdataSteamConfirm
+	m.selectedPlan = incompatibleNTFSPlan()
+	m.compatPending = compatdataActionRemountNTFS
+	m.checking = true
+	m.mutating = true
+
+	updated, cmd := m.Update(compatdataSteamClosedMsg{})
+	got := updated.(model)
+	if cmd == nil || !got.checking || !got.mutating || got.activity != textActivityRepairNTFSMount {
+		t.Fatalf("post-close repair = checking %v, mutating %v, activity %q, cmd %v", got.checking, got.mutating, got.activity, cmd)
+	}
+}
+
+func TestNTFSManualInstructionsAreSpecificAndNonDestructive(t *testing.T) {
+	m := model{selectedPlan: incompatibleNTFSPlan()}
+	content := m.compatdataNTFSManualContent()
+	for _, expected := range []string{
+		"udisksctl unmount -b '/dev/sdb1'",
+		"udisksctl mount -b '/dev/sdb1' -t ntfs",
+		"uid=$(id -u)",
+		"without changing /etc or using sudo",
+		"temporary",
+		"Never add --force",
+		"Windows system partition",
+		"separate partition dedicated to games",
+		"sudoedit /etc/default/steamos-btrfs",
+		"remove only the ignore_case item",
+		"outside Selene's user-only automation",
+	} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("manual instructions do not mention %q: %q", expected, content)
+		}
+	}
+}
+
+func TestNTFSRepairResultExplainsSessionScopeAndLuaToolsRestart(t *testing.T) {
+	m := model{compatNTFSResult: &plugins.NTFSSessionRepairResult{
+		Device:     "/dev/sdb1",
+		MountPoint: "/run/media/player/Games",
+		After: plugins.NTFSMountAssessment{
+			Compatibility: plugins.FilenameCompatibilityCompatible,
+			Driver:        "mount.ntfs",
+		},
+	}}
+	content := m.compatdataNTFSResultContent()
+	for _, expected := range []string{"case-preserving", "only until", "SLSsteam/LuaTools", "Show manual steps"} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("repair result does not mention %q: %q", expected, content)
+		}
+	}
+}
+
+func TestNTFSRepairFailureKeepsManualRecoveryAvailable(t *testing.T) {
+	m := newModel()
+	defer m.cancel()
+	m.screen = screenCompatdataSteamConfirm
+	m.compatPending = compatdataActionRemountNTFS
+	m.checking = true
+	m.mutating = true
+	repairErr := errors.New("custom remount failed")
+
+	updated, cmd := m.Update(compatdataNTFSRepairMsg{err: repairErr})
+	got := updated.(model)
+	if cmd != nil || got.screen != screenCompatdataNTFSResult || got.checking || got.mutating || !errors.Is(got.err, repairErr) {
+		t.Fatalf("repair failure = screen %v, checking %v, mutating %v, err %v, cmd %v", got.screen, got.checking, got.mutating, got.err, cmd)
+	}
+	if content := got.compatdataNTFSResultContent(); !strings.Contains(content, "Show manual steps") || !strings.Contains(content, "restore") {
+		t.Fatalf("repair failure hides recovery guidance: %q", content)
+	}
+}
+
 func configurableCompatdataPlan() plugins.CompatdataPlan {
 	return plugins.CompatdataPlan{
 		Library: plugins.SteamLibrary{
 			Path:       "/run/media/player/Games/SteamLibrary",
 			MountPoint: "/run/media/player/Games",
+			Source:     "/dev/sdb1",
 			Filesystem: "ntfs3",
 		},
 		Compatdata:   "/run/media/player/Games/SteamLibrary/steamapps/compatdata",
@@ -270,6 +413,19 @@ func configurableCompatdataPlan() plugins.CompatdataPlan {
 		CurrentState: plugins.CompatdataDirectory,
 		RequiresCopy: true,
 	}
+}
+
+func incompatibleNTFSPlan() plugins.CompatdataPlan {
+	plan := configurableCompatdataPlan()
+	plan.Library.Filesystem = "fuseblk"
+	plan.MountAssessment = plugins.NTFSMountAssessment{
+		Compatibility:   plugins.FilenameCompatibilityIncompatible,
+		Driver:          "mount.lowntfs-3g",
+		ForcedLowercase: true,
+		CanRepair:       true,
+		Reason:          "the active mount forces lowercase filenames",
+	}
+	return plan
 }
 
 func TestCompatdataRollbackResultShowsPreservedLocation(t *testing.T) {

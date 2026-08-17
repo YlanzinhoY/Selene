@@ -42,6 +42,8 @@ const (
 	screenCompatdata
 	screenCompatdataPlan
 	screenCompatdataSteamConfirm
+	screenCompatdataNTFSManual
+	screenCompatdataNTFSResult
 	screenCompatdataResult
 	screenAbout
 )
@@ -123,12 +125,19 @@ type compatdataSteamClosedMsg struct {
 	err error
 }
 
+type compatdataNTFSRepairMsg struct {
+	result plugins.NTFSSessionRepairResult
+	plan   plugins.CompatdataPlan
+	err    error
+}
+
 type compatdataPendingAction int
 
 const (
 	compatdataActionNone compatdataPendingAction = iota
 	compatdataActionConfigure
 	compatdataActionRestore
+	compatdataActionRemountNTFS
 )
 
 type menuItem struct {
@@ -172,6 +181,7 @@ type model struct {
 	compatResult     *plugins.CompatdataResult
 	compatRolledBack bool
 	compatPending    compatdataPendingAction
+	compatNTFSResult *plugins.NTFSSessionRepairResult
 	steamRunning     func() bool
 }
 
@@ -367,12 +377,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.checking = true
 		m.mutating = true
-		if m.compatPending == compatdataActionRestore {
+		if m.compatPending == compatdataActionRemountNTFS {
+			m.activity = textActivityRepairNTFSMount
+			return m, tea.Batch(m.spinner.Tick, repairNTFSMount(m.ctx, m.selectedPlan))
+		} else if m.compatPending == compatdataActionRestore {
 			m.activity = textActivityRollbackCompatdata
 		} else {
 			m.activity = textActivityConfigureCompatdata
 		}
 		return m, tea.Batch(m.spinner.Tick, runCompatdataOperation(m.selectedPlan, m.compatPending))
+	case compatdataNTFSRepairMsg:
+		m.checking = false
+		m.mutating = false
+		m.activity = ""
+		m.err = msg.err
+		m.compatPending = compatdataActionNone
+		m.compatNTFSResult = &msg.result
+		if msg.err == nil {
+			m.selectedPlan = msg.plan
+			if m.compatCursor >= 0 && m.compatCursor < len(m.compatPlans) {
+				m.compatPlans[m.compatCursor] = msg.plan
+			}
+		}
+		m.screen = screenCompatdataNTFSResult
+		m.refreshViewport()
+		return m, nil
 	case tea.KeyMsg:
 		key := msg.String()
 		if key == "ctrl+c" || key == "q" {
@@ -594,6 +623,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = textActivityRollbackCompatdata
 					return m, tea.Batch(m.spinner.Tick, runCompatdataOperation(m.selectedPlan, m.compatPending))
 				}
+			case "f":
+				assessment := m.selectedPlan.MountAssessment
+				if m.err == nil && m.selectedPlan.Library.Path != "" &&
+					assessment.Compatibility == plugins.FilenameCompatibilityIncompatible && assessment.CanRepair {
+					m.compatPending = compatdataActionRemountNTFS
+					if m.isSteamRunning() {
+						m.err = nil
+						m.screen = screenCompatdataSteamConfirm
+						m.refreshViewport()
+						return m, nil
+					}
+					m.checking = true
+					m.mutating = true
+					m.activity = textActivityRepairNTFSMount
+					return m, tea.Batch(m.spinner.Tick, repairNTFSMount(m.ctx, m.selectedPlan))
+				}
+			case "m":
+				if m.selectedPlan.Library.Path != "" &&
+					m.selectedPlan.MountAssessment.Compatibility == plugins.FilenameCompatibilityIncompatible {
+					m.err = nil
+					m.screen = screenCompatdataNTFSManual
+					m.refreshViewport()
+					return m, nil
+				}
 			}
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -614,6 +667,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = textActivityCloseSteam
 					return m, tea.Batch(m.spinner.Tick, closeSteamForCompatdata(m.ctx))
 				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdataNTFSManual:
+			if key == "esc" || key == "backspace" {
+				m.screen = screenCompatdataPlan
+				m.refreshViewport()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdataNTFSResult:
+			switch key {
+			case "esc", "backspace":
+				m.err = nil
+				m.screen = screenCompatdataPlan
+				m.refreshViewport()
+				return m, nil
+			case "m":
+				m.err = nil
+				m.screen = screenCompatdataNTFSManual
+				m.refreshViewport()
+				return m, nil
 			}
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -755,7 +833,9 @@ func (m model) View() string {
 		case screenInstallConfirm, screenInstallResult, screenRollbackConfirm, screenRollbackResult,
 			screenUninstallConfirm, screenUninstallResult, screenPlatformAssetOverride,
 			screenPlatformAssetOverrideDetails, screenPlatformAssetOverrideFixConfirm,
-			screenPlatformAssetOverrideFixResult, screenCompatdata, screenCompatdataPlan, screenCompatdataSteamConfirm, screenCompatdataResult:
+			screenPlatformAssetOverrideFixResult, screenCompatdata, screenCompatdataPlan,
+			screenCompatdataSteamConfirm, screenCompatdataNTFSManual, screenCompatdataNTFSResult,
+			screenCompatdataResult:
 			body = m.viewport.View()
 		case screenPlugins:
 			body = m.pluginsView()
@@ -793,7 +873,9 @@ func (m model) View() string {
 		footerText = textFooterCompatdata
 	} else if m.screen == screenCompatdataPlan && !m.checking {
 		footerText = textFooterCompatdataPlan
-		if m.selectedPlan.BlockedReason == "" &&
+		if m.selectedPlan.MountAssessment.Compatibility == plugins.FilenameCompatibilityIncompatible {
+			footerText = textFooterCompatdataPlanRepair
+		} else if m.selectedPlan.BlockedReason == "" &&
 			(m.selectedPlan.CurrentState == plugins.CompatdataDirectory || m.selectedPlan.CurrentState == plugins.CompatdataMissing ||
 				m.selectedPlan.CurrentState == plugins.CompatdataExternalLink || m.selectedPlan.CurrentState == plugins.CompatdataBrokenLink) {
 			footerText = textFooterCompatdataPlanConfigure
@@ -803,6 +885,10 @@ func (m model) View() string {
 		}
 	} else if m.screen == screenCompatdataSteamConfirm && !m.checking {
 		footerText = textFooterCompatdataSteamConfirm
+	} else if m.screen == screenCompatdataNTFSManual && !m.checking {
+		footerText = textFooterCompatdataNTFSManual
+	} else if m.screen == screenCompatdataNTFSResult && !m.checking {
+		footerText = textFooterCompatdataNTFSResult
 	} else if m.screen == screenCompatdataResult && !m.checking {
 		footerText = textFooterResult
 	} else if (m.screen == screenInstallResult || m.screen == screenRollbackResult || m.screen == screenUninstallResult) && !m.checking {
@@ -942,6 +1028,10 @@ func (m *model) refreshViewport() {
 		content = m.compatdataPlanContent()
 	case screenCompatdataSteamConfirm:
 		content = m.compatdataSteamConfirmContent()
+	case screenCompatdataNTFSManual:
+		content = m.compatdataNTFSManualContent()
+	case screenCompatdataNTFSResult:
+		content = m.compatdataNTFSResultContent()
 	case screenCompatdataResult:
 		content = m.compatdataResultContent()
 	default:
@@ -1139,6 +1229,10 @@ func (m model) compatdataContent() string {
 	b.WriteString("\n\n")
 	b.WriteString(textCompatdataIntro)
 	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render(textNTFSDualBootOnlyNotice))
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render(textNTFSWindowsSystemDiskWarning))
+	b.WriteString("\n\n")
 	if len(m.compatPlans) == 0 {
 		b.WriteString(mutedStyle.Render(textNoCompatdataLibraries))
 		return b.String()
@@ -1153,6 +1247,8 @@ func (m model) compatdataContent() string {
 		b.WriteString(cursor + style.Render(plan.Library.Path) + "\n")
 		b.WriteString("  " + mutedStyle.Render(fmt.Sprintf(textCompatdataMetadataFormat, plan.Library.Filesystem, plan.Library.MountPoint)) + "\n")
 		b.WriteString("  " + mutedStyle.Render(textCompatdataStateLabel+string(plan.CurrentState)) + "\n")
+		b.WriteString("  " + mountCompatibilityStyle(plan.MountAssessment).Render(
+			textNTFSFilenameStatusLabel+string(plan.MountAssessment.Compatibility)) + "\n")
 		if plan.BlockedReason != "" {
 			b.WriteString("  " + errorStyle().Render(textCompatdataBlockedLabel+plan.BlockedReason) + "\n")
 		}
@@ -1177,6 +1273,11 @@ func (m model) compatdataPlanContent() string {
 	b.WriteString("\n\n")
 	b.WriteString(textSteamLibrarySourceLabel + plan.Library.Path + "\n")
 	b.WriteString(textSteamLibraryMountLabel + plan.Library.MountPoint + "\n")
+	b.WriteString(textNTFSDeviceLabel + plan.Library.Source + "\n")
+	b.WriteString(textNTFSFilenameStatusLabel + string(plan.MountAssessment.Compatibility) + "\n")
+	if plan.MountAssessment.Driver != "" {
+		b.WriteString(textNTFSDriverLabel + plan.MountAssessment.Driver + "\n")
+	}
 	b.WriteString(textCompatdataCurrentLabel + plan.Compatdata + "\n")
 	if plan.LinkTarget != "" {
 		b.WriteString(textCompatdataExistingLinkLabel + plan.LinkTarget + "\n")
@@ -1192,6 +1293,22 @@ func (m model) compatdataPlanContent() string {
 		b.WriteString(textCompatdataBackupLabel + plan.BackupPath + "\n")
 	}
 	b.WriteString("\n")
+	if plan.MountAssessment.Compatibility == plugins.FilenameCompatibilityIncompatible {
+		b.WriteString(errorStyle().Render(textNTFSForcedLowercaseWarning))
+		b.WriteString("\n")
+		b.WriteString(mutedStyle.Render(textNTFSForcedLowercaseExplanation))
+		b.WriteString("\n\n")
+		if plan.MountAssessment.CanRepair {
+			b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textNTFSSessionRepairAction))
+			b.WriteString("  " + mutedStyle.Render(textNTFSSessionRepairScope))
+			b.WriteString("\n")
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(accentColor).Render(textNTFSManualAction))
+		b.WriteString("\n\n")
+	} else if plan.MountAssessment.Compatibility == plugins.FilenameCompatibilityUnknown {
+		b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render(textNTFSFilenameUnknown))
+		b.WriteString("\n\n")
+	}
 	if plan.BlockedReason != "" {
 		b.WriteString(errorStyle().Render(textCompatdataBlockedLabel + plan.BlockedReason))
 		b.WriteString("\n\n")
@@ -1246,15 +1363,25 @@ func (m model) compatdataSteamConfirmContent() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(textCompatdataSteamConfirmTitle))
 	b.WriteString("\n\n")
-	b.WriteString(textCompatdataSteamDetected)
+	if m.compatPending == compatdataActionRemountNTFS {
+		b.WriteString(textNTFSSteamDetected)
+	} else {
+		b.WriteString(textCompatdataSteamDetected)
+	}
 	b.WriteString("\n\n")
-	if m.compatPending == compatdataActionRestore {
+	if m.compatPending == compatdataActionRemountNTFS {
+		b.WriteString(textCompatdataSteamRemountReason)
+	} else if m.compatPending == compatdataActionRestore {
 		b.WriteString(textCompatdataSteamRestoreReason)
 	} else {
 		b.WriteString(textCompatdataSteamConfigureReason)
 	}
 	b.WriteString("\n\n")
-	b.WriteString(textCompatdataSteamCloseBehavior)
+	if m.compatPending == compatdataActionRemountNTFS {
+		b.WriteString(textNTFSSteamCloseBehavior)
+	} else {
+		b.WriteString(textCompatdataSteamCloseBehavior)
+	}
 	if m.err != nil {
 		b.WriteString("\n\n")
 		b.WriteString(errorStyle().Render("× " + m.err.Error()))
@@ -1263,6 +1390,83 @@ func (m model) compatdataSteamConfirmContent() string {
 	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textCompatdataSteamCloseAction))
 	b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) compatdataNTFSManualContent() string {
+	plan := m.selectedPlan
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textNTFSManualTitle))
+	b.WriteString("\n\n")
+	b.WriteString(textNTFSManualIntro)
+	b.WriteString("\n\n")
+	b.WriteString(textNTFSManualDeviceLabel + plan.Library.Source + "\n")
+	b.WriteString(textNTFSManualMountLabel + plan.Library.MountPoint + "\n\n")
+	b.WriteString(textNTFSManualStepClose + "\n\n")
+	device := shellQuoteDisplayArgument(plan.Library.Source)
+	b.WriteString(mutedStyle.Render(fmt.Sprintf(textNTFSManualUnmountFormat, device)))
+	b.WriteString("\n\n")
+	b.WriteString(mutedStyle.Render(fmt.Sprintf(textNTFSManualMountFormat, device)))
+	b.WriteString("\n\n")
+	b.WriteString(textNTFSManualVerify + "\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render(textNTFSManualPersistence))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(textNTFSManualNoForce))
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render(textNTFSWindowsSystemDiskWarning))
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Bold(true).Render(textNTFSManualBazziteTitle))
+	b.WriteString("\n")
+	b.WriteString(textNTFSManualBazziteIntro)
+	b.WriteString("\n\n")
+	b.WriteString(mutedStyle.Render(textNTFSManualBazziteCommand))
+	b.WriteString("\n\n")
+	b.WriteString(textNTFSManualBazziteEdit)
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(textNTFSManualBazziteBoundary))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) compatdataNTFSResultContent() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textNTFSResultTitle))
+	b.WriteString("\n\n")
+	if m.err != nil {
+		b.WriteString(errorStyle().Render("× " + m.err.Error()))
+		b.WriteString("\n\n")
+		b.WriteString(mutedStyle.Render(textNTFSResultRecoveredMount))
+		b.WriteString("\n\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(accentColor).Render(textNTFSManualAction))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	if m.compatNTFSResult == nil {
+		return b.String() + mutedStyle.Render(textNTFSNoResult)
+	}
+	b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textNTFSResultConfigured))
+	b.WriteString("\n")
+	b.WriteString(textNTFSManualDeviceLabel + m.compatNTFSResult.Device + "\n")
+	b.WriteString(textNTFSManualMountLabel + m.compatNTFSResult.MountPoint + "\n")
+	b.WriteString(textNTFSDriverLabel + m.compatNTFSResult.After.Driver + "\n\n")
+	b.WriteString(mutedStyle.Render(textNTFSResultTemporary))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(textNTFSResultOpenSteam))
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(accentColor).Render(textNTFSManualAction))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func mountCompatibilityStyle(assessment plugins.NTFSMountAssessment) lipgloss.Style {
+	switch assessment.Compatibility {
+	case plugins.FilenameCompatibilityCompatible:
+		return lipgloss.NewStyle().Foreground(goodColor)
+	case plugins.FilenameCompatibilityIncompatible:
+		return lipgloss.NewStyle().Foreground(errorColor)
+	default:
+		return lipgloss.NewStyle().Foreground(warnColor)
+	}
+}
+
+func shellQuoteDisplayArgument(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func (m model) isSteamRunning() bool {
@@ -1703,6 +1907,21 @@ func runCompatdataOperation(plan plugins.CompatdataPlan, action compatdataPendin
 func closeSteamForCompatdata(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
 		return compatdataSteamClosedMsg{err: plugins.CloseSteam(ctx)}
+	}
+}
+
+func repairNTFSMount(ctx context.Context, plan plugins.CompatdataPlan) tea.Cmd {
+	return func() tea.Msg {
+		result, err := plugins.RepairNTFSFilenameCompatibility(ctx, plan.Library)
+		if err != nil {
+			return compatdataNTFSRepairMsg{result: result, plan: plan, err: err}
+		}
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return compatdataNTFSRepairMsg{result: result, plan: plan, err: err}
+		}
+		freshPlan, err := plugins.PlanCompatdataMigration(env, plan.Library)
+		return compatdataNTFSRepairMsg{result: result, plan: freshPlan, err: err}
 	}
 }
 
