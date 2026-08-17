@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/selene-linux/selene/internal/planner"
+	"github.com/selene-linux/selene/internal/transaction"
 )
 
 // GameEngine describes the files Selene could identify in a Steam game.
@@ -60,6 +61,100 @@ func DiscoverSteamGames(env planner.Environment) ([]SteamGame, error) {
 		return nil, err
 	}
 	return discoverSteamGames(libraries), nil
+}
+
+// PlatformAssetOverrideFix records the committed transaction for a repair.
+type PlatformAssetOverrideFix struct {
+	Game          SteamGame
+	Engine        GameEngine
+	DisabledFile  string
+	TransactionID string
+	JournalPath   string
+}
+
+// FixPlatformAssetOverride disables the Unreal PlatformAssetOverrides plugin
+// by renaming its descriptor. The rename is wrapped in a Selene transaction so
+// it can be rolled back. Unity games do not exhibit this error and are refused.
+func FixPlatformAssetOverride(env planner.Environment, game SteamGame) (PlatformAssetOverrideFix, error) {
+	if runtime.GOOS != "linux" || env.OS != "linux" {
+		return PlatformAssetOverrideFix{}, errors.New("the PlatformAssetOverrides fix is supported only on Linux")
+	}
+	analysis, err := AnalyzePlatformAssetOverride(game)
+	if err != nil {
+		return PlatformAssetOverrideFix{}, err
+	}
+	if analysis.Engine != GameEngineUnreal {
+		return PlatformAssetOverrideFix{}, errors.New("the PlatformAssetOverrides error is Unreal-only; this game does not need the fix")
+	}
+	if analysis.PlatformPluginDescriptor == "" {
+		return PlatformAssetOverrideFix{}, errors.New("no PlatformAssetOverrides plugin descriptor was found to disable")
+	}
+
+	descriptor := analysis.PlatformPluginDescriptor
+	disabled := descriptor + ".disabled"
+	if _, err := os.Lstat(disabled); err == nil {
+		return PlatformAssetOverrideFix{}, fmt.Errorf("refusing to overwrite existing path %s", disabled)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return PlatformAssetOverrideFix{}, fmt.Errorf("inspect disabled descriptor destination: %w", err)
+	}
+
+	tx, err := transaction.Begin(stateRoot(env), fixDescription(game), []transaction.Target{
+		{Path: descriptor},
+		{Path: disabled},
+	}, nil)
+	if err != nil {
+		return PlatformAssetOverrideFix{}, fmt.Errorf("create fix safety snapshot: %w", err)
+	}
+	if err := os.Rename(descriptor, disabled); err != nil {
+		return PlatformAssetOverrideFix{}, abort(tx, fmt.Errorf("disable PlatformAssetOverrides descriptor: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return PlatformAssetOverrideFix{}, abort(tx, fmt.Errorf("commit fix transaction: %w", err))
+	}
+	return PlatformAssetOverrideFix{
+		Game:          game,
+		Engine:        analysis.Engine,
+		DisabledFile:  disabled,
+		TransactionID: tx.Journal.ID,
+		JournalPath:   filepath.Join(tx.Journal.Root, "journal.json"),
+	}, nil
+}
+
+// UndoPlatformAssetOverrideFix rolls back the newest committed fix for a game,
+// restoring the original plugin descriptor. It never stops or restarts Steam.
+func UndoPlatformAssetOverrideFix(env planner.Environment, game SteamGame) (PlatformAssetOverrideFix, error) {
+	if runtime.GOOS != "linux" || env.OS != "linux" {
+		return PlatformAssetOverrideFix{}, errors.New("the PlatformAssetOverrides fix is supported only on Linux")
+	}
+	journals, err := transaction.List(stateRoot(env))
+	if err != nil {
+		return PlatformAssetOverrideFix{}, err
+	}
+	for _, journal := range journals {
+		if journal.State != transaction.StateCommitted {
+			continue
+		}
+		if journal.Description != fixDescription(game) {
+			continue
+		}
+		tx, err := transaction.Open(stateRoot(env), journal.ID)
+		if err != nil {
+			return PlatformAssetOverrideFix{}, err
+		}
+		if err := tx.Rollback(); err != nil {
+			return PlatformAssetOverrideFix{}, fmt.Errorf("undo PlatformAssetOverrides fix: %w", err)
+		}
+		return PlatformAssetOverrideFix{
+			Game:          game,
+			TransactionID: tx.Journal.ID,
+			JournalPath:   filepath.Join(tx.Journal.Root, "journal.json"),
+		}, nil
+	}
+	return PlatformAssetOverrideFix{}, errors.New("no committed PlatformAssetOverrides fix was found for this game")
+}
+
+func fixDescription(game SteamGame) string {
+	return "plugin platform-asset-override fix " + game.AppID
 }
 
 // AnalyzePlatformAssetOverride identifies the game files relevant to the

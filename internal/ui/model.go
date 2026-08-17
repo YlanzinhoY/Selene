@@ -41,6 +41,8 @@ const (
 	screenSteamLibraryResult
 	screenPlatformAssetOverride
 	screenPlatformAssetOverrideDetails
+	screenPlatformAssetOverrideFixConfirm
+	screenPlatformAssetOverrideFixResult
 	screenAbout
 )
 
@@ -114,6 +116,11 @@ type assetOverrideAnalysisMsg struct {
 	err      error
 }
 
+type assetOverrideFixMsg struct {
+	fix plugins.PlatformAssetOverrideFix
+	err error
+}
+
 type menuItem struct {
 	title       string
 	description string
@@ -167,6 +174,7 @@ type model struct {
 	steamGames    []plugins.SteamGame
 	selectedGame  plugins.SteamGame
 	gameAnalysis  *plugins.AssetOverrideAnalysis
+	gameFix       *plugins.PlatformAssetOverrideFix
 }
 
 var (
@@ -336,6 +344,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.gameAnalysis = &msg.analysis
 		m.screen = screenPlatformAssetOverrideDetails
+		m.refreshViewport()
+		return m, nil
+	case assetOverrideFixMsg:
+		m.checking = false
+		m.mutating = false
+		m.activity = ""
+		m.err = msg.err
+		m.gameFix = &msg.fix
+		m.screen = screenPlatformAssetOverrideFixResult
 		m.refreshViewport()
 		return m, nil
 	case tea.KeyMsg:
@@ -521,10 +538,51 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
 		case screenPlatformAssetOverrideDetails:
-			if key == "esc" || key == "backspace" {
+			switch key {
+			case "esc", "backspace":
 				m.screen = screenPlatformAssetOverride
 				m.refreshViewport()
 				return m, nil
+			case "f":
+				if m.err == nil && m.gameAnalysis != nil && m.gameAnalysis.Engine == plugins.GameEngineUnreal && m.gameAnalysis.PlatformPluginDescriptor != "" {
+					m.screen = screenPlatformAssetOverrideFixConfirm
+					m.refreshViewport()
+					return m, nil
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenPlatformAssetOverrideFixConfirm:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenPlatformAssetOverrideDetails
+				m.refreshViewport()
+				return m, nil
+			case "f":
+				if m.err == nil && m.gameAnalysis != nil {
+					m.checking = true
+					m.mutating = true
+					m.activity = textActivityFixPlatformAssetOverride
+					return m, tea.Batch(m.spinner.Tick, fixPlatformAssetOverride(m.selectedGame))
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenPlatformAssetOverrideFixResult:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenPlatformAssetOverride
+				m.refreshViewport()
+				return m, nil
+			case "u":
+				if m.err == nil && m.gameFix != nil {
+					m.checking = true
+					m.mutating = true
+					m.activity = textActivityUndoPlatformAssetOverride
+					return m, tea.Batch(m.spinner.Tick, undoPlatformAssetOverrideFix(m.selectedGame))
+				}
 			}
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -658,7 +716,8 @@ func (m model) View() string {
 		case screenInstallConfirm, screenInstallResult, screenRollbackConfirm, screenRollbackResult,
 			screenUninstallConfirm, screenUninstallResult, screenSteamLibrary, screenSteamLibraryConfirm,
 			screenSteamLibraryRemoveConfirm, screenSteamLibraryResult, screenPlatformAssetOverride,
-			screenPlatformAssetOverrideDetails:
+			screenPlatformAssetOverrideDetails, screenPlatformAssetOverrideFixConfirm,
+			screenPlatformAssetOverrideFixResult:
 			body = m.viewport.View()
 		case screenPlugins:
 			body = m.pluginsView()
@@ -696,6 +755,10 @@ func (m model) View() string {
 		footerText = textFooterPlatformAssetOverride
 	} else if m.screen == screenPlatformAssetOverrideDetails && !m.checking {
 		footerText = textFooterPlatformAssetOverrideDetails
+	} else if m.screen == screenPlatformAssetOverrideFixConfirm && !m.checking {
+		footerText = textFooterPlatformAssetOverrideFixConfirm
+	} else if m.screen == screenPlatformAssetOverrideFixResult && !m.checking {
+		footerText = textFooterPlatformAssetOverrideFixResult
 	} else if (m.screen == screenInstallResult || m.screen == screenRollbackResult || m.screen == screenUninstallResult) && !m.checking {
 		footerText = textFooterResult
 	} else if m.mutating {
@@ -831,6 +894,10 @@ func (m *model) refreshViewport() {
 		content = m.platformAssetOverrideContent()
 	case screenPlatformAssetOverrideDetails:
 		content = m.platformAssetOverrideDetailsContent()
+	case screenPlatformAssetOverrideFixConfirm:
+		content = m.platformAssetOverrideFixConfirmContent()
+	case screenPlatformAssetOverrideFixResult:
+		content = m.platformAssetOverrideFixResultContent()
 	default:
 		return
 	}
@@ -1081,6 +1148,51 @@ func (m model) platformAssetOverrideDetailsContent() string {
 	}
 	b.WriteString(textPlatformAssetOverrideSafety + "\n\n")
 	b.WriteString(mutedStyle.Render(textPlatformAssetOverrideVerifyHint))
+	if analysis.Engine == plugins.GameEngineUnreal && analysis.PlatformPluginDescriptor != "" {
+		b.WriteString("\n\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render(textPlatformAssetOverrideFixAction))
+		b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) platformAssetOverrideFixConfirmContent() string {
+	if m.gameAnalysis == nil {
+		return titleStyle.Render(textPlatformAssetOverrideFixConfirmTitle) + "\n\n" + mutedStyle.Render(textNoPlatformAssetOverrideAnalysis)
+	}
+	analysis := m.gameAnalysis
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textPlatformAssetOverrideFixConfirmTitle + " · " + analysis.Game.Name))
+	b.WriteString("\n\n")
+	b.WriteString(textPlatformAssetOverrideFixIntro + "\n\n")
+	b.WriteString(textPlatformPluginFound + "\n")
+	b.WriteString("  " + analysis.PlatformPluginDescriptor + "\n\n")
+	b.WriteString(textPlatformAssetOverrideFixSafety + "\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textPlatformAssetOverrideFixConfirmAction))
+	b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) platformAssetOverrideFixResultContent() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textPlatformAssetOverrideFixResultTitle))
+	b.WriteString("\n\n")
+	if m.err != nil {
+		b.WriteString(errorStyle().Render("× " + m.err.Error()))
+		return b.String()
+	}
+	if m.gameFix == nil {
+		return b.String() + mutedStyle.Render(textNoPlatformAssetOverrideFix)
+	}
+	b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textPlatformAssetOverrideFixed))
+	b.WriteString("\n")
+	b.WriteString(textSteamGamePathLabel + m.gameFix.Game.Name + "\n")
+	b.WriteString(textDisabledDescriptorLabel + m.gameFix.DisabledFile + "\n")
+	if m.gameFix.TransactionID != "" {
+		b.WriteString(textTransactionLabel + m.gameFix.TransactionID + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(textPlatformAssetOverrideFixResultHint))
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -1492,6 +1604,28 @@ func analyzePlatformAssetOverride(game plugins.SteamGame) tea.Cmd {
 	return func() tea.Msg {
 		analysis, err := plugins.AnalyzePlatformAssetOverride(game)
 		return assetOverrideAnalysisMsg{analysis: analysis, err: err}
+	}
+}
+
+func fixPlatformAssetOverride(game plugins.SteamGame) tea.Cmd {
+	return func() tea.Msg {
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return assetOverrideFixMsg{err: err}
+		}
+		fix, err := plugins.FixPlatformAssetOverride(env, game)
+		return assetOverrideFixMsg{fix: fix, err: err}
+	}
+}
+
+func undoPlatformAssetOverrideFix(game plugins.SteamGame) tea.Cmd {
+	return func() tea.Msg {
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return assetOverrideFixMsg{err: err}
+		}
+		fix, err := plugins.UndoPlatformAssetOverrideFix(env, game)
+		return assetOverrideFixMsg{fix: fix, err: err}
 	}
 }
 

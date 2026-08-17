@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/selene-linux/selene/internal/planner"
 )
 
 func TestParseLibraryFoldersUnescapesAndDeduplicates(t *testing.T) {
@@ -61,5 +63,78 @@ func TestAnalyzePlatformAssetOverrideFindsUnityAndUnrealSignals(t *testing.T) {
 	}
 	if analysis.Engine != GameEngineUnreal || len(analysis.UnityAssets) != 1 || analysis.PlatformPluginDescriptor != plugin || !analysis.PlatformPluginReferenced {
 		t.Fatalf("analysis = %#v", analysis)
+	}
+}
+
+func TestFixPlatformAssetOverrideDisablesUnrealPlugin(t *testing.T) {
+	root := t.TempDir()
+	descriptor := filepath.Join(root, "Plugins", "PlatformAssetOverrides", "PlatformAssetOverrides.uplugin")
+	if err := os.MkdirAll(filepath.Dir(descriptor), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(descriptor, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := planner.Environment{
+		OS:           "linux",
+		XDGDataHome:  filepath.Join(root, "data"),
+		XDGStateHome: filepath.Join(root, "state"),
+	}
+	fix, err := FixPlatformAssetOverride(env, SteamGame{AppID: "1234", InstallPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fix.Engine != GameEngineUnreal || fix.DisabledFile != descriptor+".disabled" {
+		t.Fatalf("fix = %#v", fix)
+	}
+	if _, err := os.Stat(descriptor); !os.IsNotExist(err) {
+		t.Fatalf("descriptor still exists after fix")
+	}
+	if _, err := os.Stat(descriptor + ".disabled"); err != nil {
+		t.Fatalf("disabled descriptor missing: %v", err)
+	}
+}
+
+func TestUndoPlatformAssetOverrideFixRestoresDescriptor(t *testing.T) {
+	root := t.TempDir()
+	descriptor := filepath.Join(root, "Plugins", "PlatformAssetOverrides", "PlatformAssetOverrides.uplugin")
+	if err := os.MkdirAll(filepath.Dir(descriptor), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(descriptor, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := planner.Environment{
+		OS:           "linux",
+		XDGDataHome:  filepath.Join(root, "data"),
+		XDGStateHome: filepath.Join(root, "state"),
+	}
+	game := SteamGame{AppID: "1234", InstallPath: root}
+	if _, err := FixPlatformAssetOverride(env, game); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UndoPlatformAssetOverrideFix(env, game); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(descriptor); err != nil {
+		t.Fatalf("descriptor not restored: %v", err)
+	}
+	if _, err := os.Stat(descriptor + ".disabled"); !os.IsNotExist(err) {
+		t.Fatalf("disabled descriptor still present after undo")
+	}
+}
+
+func TestFixPlatformAssetOverrideRefusesUnity(t *testing.T) {
+	root := t.TempDir()
+	asset := filepath.Join(root, "Game_Data", "resources.assets")
+	if err := os.MkdirAll(filepath.Dir(asset), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(asset, []byte("unity"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := planner.Environment{OS: "linux", XDGStateHome: filepath.Join(root, "state")}
+	if _, err := FixPlatformAssetOverride(env, SteamGame{AppID: "1", InstallPath: root}); err == nil {
+		t.Fatal("expected Unity game to be refused")
 	}
 }
