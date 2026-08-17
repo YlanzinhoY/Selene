@@ -531,7 +531,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "m":
 				if m.err == nil && m.selectedPlan.Library.Path != "" && m.selectedPlan.BlockedReason == "" &&
-					(m.selectedPlan.CurrentState == plugins.CompatdataDirectory || m.selectedPlan.CurrentState == plugins.CompatdataMissing) {
+					(m.selectedPlan.CurrentState == plugins.CompatdataDirectory || m.selectedPlan.CurrentState == plugins.CompatdataMissing ||
+						m.selectedPlan.CurrentState == plugins.CompatdataExternalLink || m.selectedPlan.CurrentState == plugins.CompatdataBrokenLink) {
 					m.checking = true
 					m.mutating = true
 					m.activity = textActivityMigrateCompatdata
@@ -1107,6 +1108,9 @@ func (m model) compatdataPlanContent() string {
 	if plan.LinkTarget != "" {
 		b.WriteString(textCompatdataExistingLinkLabel + plan.LinkTarget + "\n")
 	}
+	if plan.ImportSource != "" {
+		b.WriteString(textCompatdataImportSourceLabel + plan.ImportSource + "\n")
+	}
 	b.WriteString(textCompatdataTargetLabel + plan.NativeTarget + "\n")
 	if plan.RequiresBackup || (plan.RollbackAvailable && plan.BackupPath != "") {
 		b.WriteString(textCompatdataBackupLabel + plan.BackupPath + "\n")
@@ -1129,15 +1133,28 @@ func (m model) compatdataPlanContent() string {
 		}
 		return strings.TrimRight(b.String(), "\n")
 	}
-	if plan.RequiresCopy {
+	if plan.DetachesExistingLink && plan.RequiresCopy {
+		b.WriteString(mutedStyle.Render(textCompatdataWillImportLink))
+	} else if plan.DetachesExistingLink {
+		b.WriteString(mutedStyle.Render(textCompatdataWillReplaceBroken))
+	} else if plan.RequiresCopy {
 		b.WriteString(mutedStyle.Render(textCompatdataWillCopy))
 	} else {
 		b.WriteString(mutedStyle.Render(textCompatdataWillLink))
 	}
 	b.WriteString("\n\n")
-	b.WriteString(textCompatdataSafety + "\n\n")
-	if plan.CurrentState == plugins.CompatdataDirectory || plan.CurrentState == plugins.CompatdataMissing {
-		b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textCompatdataMigrateAction))
+	if plan.DetachesExistingLink {
+		b.WriteString(textCompatdataManualLinkSafety + "\n\n")
+	} else {
+		b.WriteString(textCompatdataSafety + "\n\n")
+	}
+	if plan.CurrentState == plugins.CompatdataDirectory || plan.CurrentState == plugins.CompatdataMissing ||
+		plan.CurrentState == plugins.CompatdataExternalLink || plan.CurrentState == plugins.CompatdataBrokenLink {
+		action := textCompatdataMigrateAction
+		if plan.DetachesExistingLink {
+			action = textCompatdataReplaceLinkAction
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(action))
 		b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
 	} else {
 		b.WriteString(mutedStyle.Render(textCompatdataNoMigrate))
@@ -1173,6 +1190,8 @@ func (m model) compatdataResultContent() string {
 	b.WriteString("\n")
 	if m.compatRolledBack {
 		b.WriteString(mutedStyle.Render(textCompatdataRollbackResultHint))
+	} else if plan.DetachesExistingLink {
+		b.WriteString(mutedStyle.Render(textCompatdataManualResultHint))
 	} else {
 		b.WriteString(mutedStyle.Render(textCompatdataResultHint))
 	}
