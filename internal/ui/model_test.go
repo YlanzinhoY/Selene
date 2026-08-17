@@ -95,18 +95,45 @@ func TestAboutCreditsCreator(t *testing.T) {
 	}
 }
 
-func TestHomeIncludesSelenePlugins(t *testing.T) {
+func TestHomeIncludesPluginsWithNewBadge(t *testing.T) {
 	m := newModel()
 	defer m.cancel()
 	var found bool
 	for _, item := range m.items {
-		if item.title == "Selene Plugins" {
+		if item.title == "Plugins" {
+			if item.badge != "NEW" {
+				t.Fatalf("Plugins badge = %q, want NEW", item.badge)
+			}
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("home menu = %#v; Selene Plugins is missing", m.items)
+		t.Fatalf("home menu = %#v; Plugins is missing", m.items)
+	}
+	content := m.homeView()
+	if !strings.Contains(content, badgeStyle.Render("NEW")) {
+		t.Fatalf("home menu does not render the colored NEW badge: %q", content)
+	}
+	if strings.Contains(content, "Selene Plugins") {
+		t.Fatalf("home menu still contains the old Selene Plugins label: %q", content)
+	}
+}
+
+func TestPlatformAssetOverridesPluginIsHidden(t *testing.T) {
+	m := newModel()
+	defer m.cancel()
+	for _, item := range m.pluginItems {
+		if item.title == "Fix PlatformAssetOverrides" {
+			t.Fatalf("hidden plugin is exposed in the default menu: %#v", m.pluginItems)
+		}
+	}
+	content := m.pluginsView()
+	if !strings.Contains(content, "Plugins") || strings.Contains(content, "Selene Plugins") {
+		t.Fatalf("plugins screen title is incorrect: %q", content)
+	}
+	if strings.Contains(content, "Fix PlatformAssetOverrides") {
+		t.Fatalf("hidden plugin is rendered: %q", content)
 	}
 }
 

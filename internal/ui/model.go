@@ -142,7 +142,9 @@ const (
 
 type menuItem struct {
 	title       string
+	badge       string
 	description string
+	hidden      bool
 }
 
 type model struct {
@@ -194,6 +196,7 @@ var (
 	errorColor  = lipgloss.Color("#FB7185")
 
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(moonColor)
+	badgeStyle = lipgloss.NewStyle().Bold(true).Foreground(goodColor)
 	mutedStyle = lipgloss.NewStyle().Foreground(mutedColor)
 	boxStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(moonColor).Padding(1, 4)
 )
@@ -915,7 +918,11 @@ func (m model) homeView() string {
 			cursor = "› "
 			style = style.Bold(true).Foreground(accentColor)
 		}
-		fmt.Fprintf(&b, "%s%s\n", cursor, style.Render(item.title))
+		fmt.Fprintf(&b, "%s%s", cursor, style.Render(item.title))
+		if item.badge != "" {
+			fmt.Fprintf(&b, " %s", badgeStyle.Render(item.badge))
+		}
+		b.WriteString("\n")
 		if i == 3 || i == 5 {
 			b.WriteString("\n")
 		}

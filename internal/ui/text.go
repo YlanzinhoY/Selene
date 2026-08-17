@@ -115,7 +115,7 @@ const (
 	textSafetyTransactionLabel = "Safety transaction: "
 	textNothingRemoved         = "No managed installation was found; nothing changed."
 
-	textPluginsTitle            = "Selene Plugins"
+	textPluginsTitle            = "Plugins"
 	textSteamLibrarySourceLabel = "Library: "
 	textSteamLibraryMountLabel  = "Mounted disk: "
 
@@ -247,7 +247,7 @@ var textHomeMenu = []menuItem{
 	{title: "Install LuaTools", description: "Use verified sources with an automatic snapshot and rollback"},
 	{title: "Undo last installation", description: "Restore the exact previous state and restart Steam"},
 	{title: "Remove LuaTools completely", description: "Remove LuaTools, Lumen, and slsteam-moon from your user account"},
-	{title: "Selene Plugins", description: "Explore optional community tools that remain safe and user-scoped"},
+	{title: "Plugins", badge: "NEW", description: "Explore optional community tools that remain safe and user-scoped"},
 	{title: "About Selene", description: "Learn about the project's mission and current status"},
 	{title: "Exit", description: "Close the interface"},
 }
@@ -258,9 +258,15 @@ func defaultMenuItems() []menuItem {
 
 var textPluginMenu = []menuItem{
 	{title: "NTFS Compatdata Link", description: "Move Proton prefixes off NTFS to a native Linux filesystem"},
-	{title: "Fix PlatformAssetOverrides", description: "Find a Steam game and inspect this Unreal or Unity compatibility error"},
+	{title: "Fix PlatformAssetOverrides", description: "Find a Steam game and inspect this Unreal or Unity compatibility error", hidden: true},
 }
 
 func defaultPluginItems() []menuItem {
-	return append([]menuItem(nil), textPluginMenu...)
+	items := make([]menuItem, 0, len(textPluginMenu))
+	for _, item := range textPluginMenu {
+		if !item.hidden {
+			items = append(items, item)
+		}
+	}
+	return items
 }
