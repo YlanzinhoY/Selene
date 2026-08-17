@@ -8,6 +8,8 @@ TUI
  ├── doctor      read-only compatibility checks
  ├── catalog     embedded validated manifests
  ├── planner     read-only installation details
+ ├── plugins     optional, user-scoped community integrations
+ │    └── mounted NTFS Steam-library discovery and managed symbolic links
  ├── artifact    download, integrity, and ZIP inspection
  ├── installer   user-only install and complete removal
  │    ├── pinned slsteam-moon setup.sh

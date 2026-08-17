@@ -62,6 +62,7 @@ The home screen contains:
 - **Install LuaTools:** creates a snapshot and installs the pinned LuaTools stack after confirmation.
 - **Undo last installation:** restores the exact previous snapshot and restarts Steam.
 - **Remove LuaTools completely:** removes LuaTools, Lumen, slsteam-moon, settings, services, and user-level Steam integration.
+- **Selene Plugins:** contains optional, user-scoped community integrations.
 - **About Selene:** shows the mission, current state, and creator credit.
 
 Recommended first run:
@@ -74,6 +75,14 @@ Recommended first run:
 6. Open Steam after installation succeeds.
 
 Selene intentionally exposes no operational CLI commands. The internal `--version` flag exists only for release diagnostics and bootstrap validation.
+
+### Shared Steam library (NTFS)
+
+The first Selene Plugin helps a Linux Steam installation use an existing Windows game library without copying it. It scans only mounted NTFS volumes for directories containing `steamapps`, then lets you select one and inspect the exact symbolic-link destination before anything changes.
+
+Selene creates its link under `~/.local/share/selene/plugins/steam-library/` (or the equivalent `XDG_DATA_HOME` directory) and records a separate transaction. It does not mount a disk, edit `/etc/fstab`, alter games, or edit Steam configuration. If Steam does not discover the library automatically, add the displayed link from **Steam Settings → Storage**.
+
+Select a **Managed symbolic link** in this plugin and press `r` to review its removal. Confirm with `x`; only that link is deleted. The source disk and every game file remain unchanged, including when the disk is currently unavailable.
 
 ## Rollback versus complete removal
 
