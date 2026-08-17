@@ -27,10 +27,13 @@ type mount struct {
 	point      string
 	source     string
 	filesystem string
+	readOnly   bool
 }
 
-// DiscoverSteamLibraries finds existing Steam libraries on mounted NTFS
-// volumes. It only reads the mount table and directory metadata.
+// DiscoverSteamLibraries finds Steam libraries known to Steam as well as
+// conventional library roots on mounted NTFS volumes. A configured library is
+// discovered through libraryfolders.vdf even when it is nested more deeply
+// than the fallback mount scan or is reached through a symbolic link.
 func DiscoverSteamLibraries(env planner.Environment) ([]SteamLibrary, error) {
 	if runtime.GOOS != "linux" || env.OS != "linux" {
 		return nil, errors.New("the shared Steam library feature is supported only on Linux")
@@ -39,11 +42,11 @@ func DiscoverSteamLibraries(env planner.Environment) ([]SteamLibrary, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read mounted disks: %w", err)
 	}
-	mounts, err := parseMountInfo(data)
+	mounts, err := parseMountInfoLines(data)
 	if err != nil {
 		return nil, err
 	}
-	return discoverSteamLibraries(mounts), nil
+	return discoverSteamLibraries(env, mounts), nil
 }
 
 func parseMountInfo(data []byte) ([]mount, error) {
@@ -87,7 +90,12 @@ func parseMountInfoLines(data []byte) ([]mount, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode mount source: %w", err)
 		}
-		mounts = append(mounts, mount{point: filepath.Clean(point), source: source, filesystem: filesystem})
+		mounts = append(mounts, mount{
+			point:      filepath.Clean(point),
+			source:     source,
+			filesystem: filesystem,
+			readOnly:   mountIsReadOnly(fields[5]),
+		})
 	}
 	sort.Slice(mounts, func(i, j int) bool { return mounts[i].point < mounts[j].point })
 	return mounts, nil
@@ -100,7 +108,7 @@ func findMountFor(mounts []mount, path string) (mount, bool) {
 	found := false
 	for _, candidate := range mounts {
 		point := filepath.Clean(candidate.point)
-		if clean != point && !strings.HasPrefix(clean, point+string(filepath.Separator)) {
+		if !mountContains(point, clean) {
 			continue
 		}
 		if !found || len(point) > len(filepath.Clean(best.point)) {
@@ -111,23 +119,59 @@ func findMountFor(mounts []mount, path string) (mount, bool) {
 	return best, found
 }
 
-func discoverSteamLibraries(mounts []mount) []SteamLibrary {
+func mountContains(point, path string) bool {
+	if point == string(filepath.Separator) {
+		return filepath.IsAbs(path)
+	}
+	return path == point || strings.HasPrefix(path, point+string(filepath.Separator))
+}
+
+func mountIsReadOnly(options string) bool {
+	for _, option := range strings.Split(options, ",") {
+		if option == "ro" {
+			return true
+		}
+	}
+	return false
+}
+
+func discoverSteamLibraries(env planner.Environment, mounts []mount) []SteamLibrary {
 	seen := make(map[string]bool)
 	var libraries []SteamLibrary
+	add := func(path string) {
+		physical := canonicalPath(path)
+		if !isSteamLibraryRoot(physical) {
+			return
+		}
+		mount, ok := findMountFor(mounts, physical)
+		if !ok || !isNTFS(mount.filesystem) || seen[physical] {
+			return
+		}
+		seen[physical] = true
+		libraries = append(libraries, SteamLibrary{
+			Path:       physical,
+			MountPoint: mount.point,
+			Source:     mount.source,
+			Filesystem: mount.filesystem,
+		})
+	}
+
+	for _, root := range steamRootCandidates(env) {
+		add(root)
+		data, err := os.ReadFile(filepath.Join(root, "steamapps", "libraryfolders.vdf"))
+		if err != nil {
+			continue
+		}
+		for _, library := range parseLibraryFolders(string(data)) {
+			add(library)
+		}
+	}
 	for _, mount := range mounts {
-		roots := findSteamLibraryRoots(mount.point)
-		for _, root := range roots {
-			root = filepath.Clean(root)
-			if seen[root] {
-				continue
-			}
-			seen[root] = true
-			libraries = append(libraries, SteamLibrary{
-				Path:       root,
-				MountPoint: mount.point,
-				Source:     mount.source,
-				Filesystem: mount.filesystem,
-			})
+		if !isNTFS(mount.filesystem) {
+			continue
+		}
+		for _, root := range findSteamLibraryRoots(mount.point) {
+			add(root)
 		}
 	}
 	sort.Slice(libraries, func(i, j int) bool { return libraries[i].Path < libraries[j].Path })
@@ -172,6 +216,20 @@ func findSteamLibraryRoots(mountPoint string) []string {
 	}
 	sort.Strings(roots)
 	return roots
+}
+
+func steamRootCandidates(env planner.Environment) []string {
+	return []string{
+		filepath.Join(env.XDGDataHome, "Steam"),
+		filepath.Join(env.Home, ".local", "share", "Steam"),
+		filepath.Join(env.Home, ".steam", "steam"),
+		filepath.Join(env.Home, ".steam", "root"),
+		filepath.Join(env.Home, ".steam", "debian-installation"),
+		filepath.Join(env.Home, ".var", "app", "com.valvesoftware.Steam", ".steam", "steam"),
+		filepath.Join(env.Home, ".var", "app", "com.valvesoftware.Steam", ".steam", "root"),
+		filepath.Join(env.Home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),
+		filepath.Join(env.Home, ".var", "app", "com.valvesoftware.Steam", "data", "Steam"),
+	}
 }
 
 func isSteamLibraryRoot(path string) bool {
