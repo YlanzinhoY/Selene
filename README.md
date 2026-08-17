@@ -40,7 +40,7 @@ Wine and Proton do not block Selene. Each game continues using the compatibility
 
 Never run Selene with `sudo`.
 
-## Install v0.0.2
+## Install v0.0.3
 
 Download and inspect the bootstrap before running it:
 
@@ -50,7 +50,7 @@ curl --proto '=https' --tlsv1.2 -fL \
   -o /tmp/selene-install.sh
 
 less /tmp/selene-install.sh
-sh /tmp/selene-install.sh --version v0.0.2
+sh /tmp/selene-install.sh --version v0.0.3
 ```
 
 Press `q` to close `less`. The bootstrap verifies the release checksum and atomically installs only `~/.local/bin/selene`.
