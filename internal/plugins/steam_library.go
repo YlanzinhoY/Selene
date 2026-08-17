@@ -190,6 +190,24 @@ func RemoveSteamLibraryLink(env planner.Environment, link Link) (Result, error) 
 }
 
 func parseMountInfo(data []byte) ([]mount, error) {
+	mounts, err := parseMountInfoLines(data)
+	if err != nil {
+		return nil, err
+	}
+	filtered := mounts[:0]
+	for _, candidate := range mounts {
+		if isNTFS(candidate.filesystem) {
+			filtered = append(filtered, candidate)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].point < filtered[j].point })
+	return filtered, nil
+}
+
+// parseMountInfoLines returns every mount entry, regardless of filesystem. It
+// is shared with the compatdata migration feature, which must compare the
+// NTFS source library against the target's native filesystem.
+func parseMountInfoLines(data []byte) ([]mount, error) {
 	var mounts []mount
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		fields := strings.Fields(line)
@@ -204,21 +222,36 @@ func parseMountInfo(data []byte) ([]mount, error) {
 			return nil, fmt.Errorf("parse mounted disks: invalid mountinfo line %q", line)
 		}
 		filesystem := fields[separator+1]
-		if !isNTFS(filesystem) {
-			continue
-		}
 		point, err := decodeMountField(fields[4])
 		if err != nil {
-			return nil, fmt.Errorf("decode NTFS mount point: %w", err)
+			return nil, fmt.Errorf("decode mount point: %w", err)
 		}
 		source, err := decodeMountField(fields[separator+2])
 		if err != nil {
-			return nil, fmt.Errorf("decode NTFS mount source: %w", err)
+			return nil, fmt.Errorf("decode mount source: %w", err)
 		}
 		mounts = append(mounts, mount{point: filepath.Clean(point), source: source, filesystem: filesystem})
 	}
 	sort.Slice(mounts, func(i, j int) bool { return mounts[i].point < mounts[j].point })
 	return mounts, nil
+}
+
+// findMountFor returns the most specific mount whose point contains path.
+func findMountFor(mounts []mount, path string) (mount, bool) {
+	clean := filepath.Clean(path)
+	best := mount{}
+	found := false
+	for _, candidate := range mounts {
+		point := filepath.Clean(candidate.point)
+		if clean != point && !strings.HasPrefix(clean, point+string(filepath.Separator)) {
+			continue
+		}
+		if !found || len(point) > len(filepath.Clean(best.point)) {
+			best = candidate
+			found = true
+		}
+	}
+	return best, found
 }
 
 func discoverSteamLibraries(mounts []mount) []SteamLibrary {
