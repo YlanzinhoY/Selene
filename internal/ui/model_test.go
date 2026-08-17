@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -108,47 +107,25 @@ func TestHomeIncludesSelenePlugins(t *testing.T) {
 	}
 }
 
-func TestSteamLibraryConfirmationExplainsSafetyBoundary(t *testing.T) {
+func TestCompatdataPlanConfirmationExplainsSafetyBoundary(t *testing.T) {
 	m := model{
-		steamDataHome: filepath.Join("/home", "player", ".local", "share"),
-		selectedSteam: steamEntry{
-			kind: steamEntryLibrary,
-			library: plugins.SteamLibrary{
+		selectedPlan: plugins.CompatdataPlan{
+			Library: plugins.SteamLibrary{
 				Path:       "/run/media/player/Games/SteamLibrary",
 				MountPoint: "/run/media/player/Games",
 				Filesystem: "ntfs3",
 			},
+			Compatdata:     "/run/media/player/Games/SteamLibrary/steamapps/compatdata",
+			NativeTarget:   "/home/player/.local/share/selene/steam-compatdata/abc123",
+			CurrentState:   plugins.CompatdataDirectory,
+			RequiresCopy:   true,
+			RequiresBackup: true,
 		},
 	}
-	content := m.steamLibraryConfirmContent()
-	for _, expected := range []string{"symbolic link", "games", "Steam's configuration", "Steam Settings", "Press l"} {
+	content := m.compatdataPlanContent()
+	for _, expected := range []string{"symlink", "Press m", "No files are deleted", "Native target"} {
 		if !strings.Contains(content, expected) {
-			t.Fatalf("confirmation does not mention %q: %q", expected, content)
+			t.Fatalf("plan confirmation does not mention %q: %q", expected, content)
 		}
-	}
-}
-
-func TestSteamLibraryRemovalExplainsItOnlyRemovesTheLink(t *testing.T) {
-	m := model{selectedSteam: steamEntry{
-		kind: steamEntryLink,
-		link: plugins.Link{
-			Path:   "/home/player/.local/share/selene/plugins/steam-library/games",
-			Target: "/run/media/player/Games/SteamLibrary",
-		},
-	}}
-	content := m.steamLibraryRemoveConfirmContent()
-	for _, expected := range []string{"Only this symbolic link", "games", "Steam configuration", "Press x"} {
-		if !strings.Contains(content, expected) {
-			t.Fatalf("removal confirmation does not mention %q: %q", expected, content)
-		}
-	}
-}
-
-func TestSteamEntriesKeepManagedLinksAndHideDuplicateCandidates(t *testing.T) {
-	library := plugins.SteamLibrary{Path: "/run/media/player/Games/SteamLibrary"}
-	link := plugins.Link{Path: "/home/player/.local/share/selene/plugins/steam-library/games", Target: library.Path}
-	entries := makeSteamEntries([]plugins.SteamLibrary{library}, []plugins.Link{link})
-	if len(entries) != 1 || entries[0].kind != steamEntryLink || entries[0].link != link {
-		t.Fatalf("steam entries = %#v", entries)
 	}
 }

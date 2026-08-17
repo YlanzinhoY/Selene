@@ -35,14 +35,13 @@ const (
 	screenUninstallConfirm
 	screenUninstallResult
 	screenPlugins
-	screenSteamLibrary
-	screenSteamLibraryConfirm
-	screenSteamLibraryRemoveConfirm
-	screenSteamLibraryResult
 	screenPlatformAssetOverride
 	screenPlatformAssetOverrideDetails
 	screenPlatformAssetOverrideFixConfirm
 	screenPlatformAssetOverrideFixResult
+	screenCompatdata
+	screenCompatdataPlan
+	screenCompatdataResult
 	screenAbout
 )
 
@@ -93,19 +92,6 @@ type uninstallMsg struct {
 	err    error
 }
 
-type steamLibrariesMsg struct {
-	libraries []plugins.SteamLibrary
-	links     []plugins.Link
-	dataHome  string
-	err       error
-}
-
-type steamLinkMsg struct {
-	result  plugins.Result
-	removed bool
-	err     error
-}
-
 type steamGamesMsg struct {
 	games []plugins.SteamGame
 	err   error
@@ -121,60 +107,55 @@ type assetOverrideFixMsg struct {
 	err error
 }
 
+type compatdataMsg struct {
+	plans []plugins.CompatdataPlan
+	err   error
+}
+
+type compatdataApplyMsg struct {
+	result plugins.CompatdataResult
+	err    error
+}
+
 type menuItem struct {
 	title       string
 	description string
 }
 
-type steamEntryKind int
-
-const (
-	steamEntryLibrary steamEntryKind = iota
-	steamEntryLink
-)
-
-type steamEntry struct {
-	kind    steamEntryKind
-	library plugins.SteamLibrary
-	link    plugins.Link
-}
-
 type model struct {
-	width         int
-	height        int
-	cursor        int
-	pluginCursor  int
-	steamCursor   int
-	gameCursor    int
-	screen        screen
-	ctx           context.Context
-	cancel        context.CancelFunc
-	checking      bool
-	mutating      bool
-	activity      string
-	spinner       spinner.Model
-	viewport      viewport.Model
-	report        *doctor.Report
-	plan          *planner.Plan
-	fetched       []artifact.Result
-	installed     *installer.Result
-	rolledBack    *installer.RollbackResult
-	removal       *installer.UninstallPreview
-	uninstalled   *installer.UninstallResult
-	history       []transaction.Journal
-	log           string
-	err           error
-	items         []menuItem
-	pluginItems   []menuItem
-	steamEntries  []steamEntry
-	selectedSteam steamEntry
-	steamDataHome string
-	steamResult   *plugins.Result
-	steamRemoved  bool
-	steamGames    []plugins.SteamGame
-	selectedGame  plugins.SteamGame
-	gameAnalysis  *plugins.AssetOverrideAnalysis
-	gameFix       *plugins.PlatformAssetOverrideFix
+	width        int
+	height       int
+	cursor       int
+	pluginCursor int
+	gameCursor   int
+	screen       screen
+	ctx          context.Context
+	cancel       context.CancelFunc
+	checking     bool
+	mutating     bool
+	activity     string
+	spinner      spinner.Model
+	viewport     viewport.Model
+	report       *doctor.Report
+	plan         *planner.Plan
+	fetched      []artifact.Result
+	installed    *installer.Result
+	rolledBack   *installer.RollbackResult
+	removal      *installer.UninstallPreview
+	uninstalled  *installer.UninstallResult
+	history      []transaction.Journal
+	log          string
+	err          error
+	items        []menuItem
+	pluginItems  []menuItem
+	steamGames   []plugins.SteamGame
+	selectedGame plugins.SteamGame
+	gameAnalysis *plugins.AssetOverrideAnalysis
+	gameFix      *plugins.PlatformAssetOverrideFix
+	compatPlans  []plugins.CompatdataPlan
+	compatCursor int
+	selectedPlan plugins.CompatdataPlan
+	compatResult *plugins.CompatdataResult
 }
 
 var (
@@ -309,26 +290,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenUninstallResult
 		m.refreshViewport()
 		return m, nil
-	case steamLibrariesMsg:
-		m.checking = false
-		m.activity = ""
-		m.err = msg.err
-		m.steamEntries = makeSteamEntries(msg.libraries, msg.links)
-		m.steamDataHome = msg.dataHome
-		m.steamCursor = 0
-		m.screen = screenSteamLibrary
-		m.refreshViewport()
-		return m, nil
-	case steamLinkMsg:
-		m.checking = false
-		m.mutating = false
-		m.activity = ""
-		m.err = msg.err
-		m.steamResult = &msg.result
-		m.steamRemoved = msg.removed
-		m.screen = screenSteamLibraryResult
-		m.refreshViewport()
-		return m, nil
 	case steamGamesMsg:
 		m.checking = false
 		m.activity = ""
@@ -353,6 +314,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.gameFix = &msg.fix
 		m.screen = screenPlatformAssetOverrideFixResult
+		m.refreshViewport()
+		return m, nil
+	case compatdataMsg:
+		m.checking = false
+		m.activity = ""
+		m.err = msg.err
+		m.compatPlans = msg.plans
+		m.compatCursor = 0
+		m.screen = screenCompatdata
+		m.refreshViewport()
+		return m, nil
+	case compatdataApplyMsg:
+		m.checking = false
+		m.mutating = false
+		m.activity = ""
+		m.err = msg.err
+		m.compatResult = &msg.result
+		m.screen = screenCompatdataResult
 		m.refreshViewport()
 		return m, nil
 	case tea.KeyMsg:
@@ -430,87 +409,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch m.pluginCursor {
 				case 0:
 					m.checking = true
-					m.activity = textActivitySteamLibraries
-					return m, tea.Batch(m.spinner.Tick, scanSteamLibraries())
+					m.activity = textActivityScanCompatdata
+					return m, tea.Batch(m.spinner.Tick, scanCompatdata())
 				case 1:
 					m.checking = true
 					m.activity = textActivitySteamGames
 					return m, tea.Batch(m.spinner.Tick, scanSteamGames())
 				}
 			}
-		case screenSteamLibrary:
-			switch key {
-			case "esc", "backspace":
-				m.screen = screenPlugins
-				return m, nil
-			case "up", "k":
-				if m.steamCursor > 0 {
-					m.steamCursor--
-					m.refreshViewport()
-				}
-			case "down", "j":
-				if m.steamCursor < len(m.steamEntries)-1 {
-					m.steamCursor++
-					m.refreshViewport()
-				}
-			case "enter", " ":
-				if entry, ok := m.currentSteamEntry(); ok && entry.kind == steamEntryLibrary && m.err == nil {
-					m.selectedSteam = entry
-					m.screen = screenSteamLibraryConfirm
-					m.refreshViewport()
-				}
-			case "r":
-				if entry, ok := m.currentSteamEntry(); ok && entry.kind == steamEntryLink && m.err == nil {
-					m.selectedSteam = entry
-					m.screen = screenSteamLibraryRemoveConfirm
-					m.refreshViewport()
-				}
-			}
-			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
-		case screenSteamLibraryConfirm:
-			switch key {
-			case "esc", "backspace":
-				m.screen = screenSteamLibrary
-				m.refreshViewport()
-				return m, nil
-			case "l":
-				if m.err == nil && m.selectedSteam.kind == steamEntryLibrary {
-					m.checking = true
-					m.mutating = true
-					m.activity = textActivityCreateSteamLink
-					return m, tea.Batch(m.spinner.Tick, createSteamLibraryLink(m.selectedSteam.library))
-				}
-			}
-			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
-		case screenSteamLibraryRemoveConfirm:
-			switch key {
-			case "esc", "backspace":
-				m.screen = screenSteamLibrary
-				m.refreshViewport()
-				return m, nil
-			case "x":
-				if m.err == nil && m.selectedSteam.kind == steamEntryLink {
-					m.checking = true
-					m.mutating = true
-					m.activity = textActivityRemoveSteamLink
-					return m, tea.Batch(m.spinner.Tick, removeSteamLibraryLink(m.selectedSteam.link))
-				}
-			}
-			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
-		case screenSteamLibraryResult:
-			if key == "esc" || key == "backspace" {
-				m.screen = screenPlugins
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
 		case screenPlatformAssetOverride:
 			switch key {
 			case "esc", "backspace":
@@ -583,6 +489,56 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = textActivityUndoPlatformAssetOverride
 					return m, tea.Batch(m.spinner.Tick, undoPlatformAssetOverrideFix(m.selectedGame))
 				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdata:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenPlugins
+				return m, nil
+			case "up", "k":
+				if m.compatCursor > 0 {
+					m.compatCursor--
+					m.refreshViewport()
+				}
+			case "down", "j":
+				if m.compatCursor < len(m.compatPlans)-1 {
+					m.compatCursor++
+					m.refreshViewport()
+				}
+			case "enter", " ":
+				if plan, ok := m.currentCompatdataPlan(); ok && m.err == nil {
+					m.selectedPlan = plan
+					m.screen = screenCompatdataPlan
+					m.refreshViewport()
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdataPlan:
+			switch key {
+			case "esc", "backspace":
+				m.screen = screenCompatdata
+				m.refreshViewport()
+				return m, nil
+			case "m":
+				if m.err == nil && m.selectedPlan.Library.Path != "" {
+					m.checking = true
+					m.mutating = true
+					m.activity = textActivityMigrateCompatdata
+					return m, tea.Batch(m.spinner.Tick, applyCompatdataMigration(m.selectedPlan))
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdataResult:
+			if key == "esc" || key == "backspace" {
+				m.screen = screenPlugins
+				return m, nil
 			}
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -714,10 +670,9 @@ func (m model) View() string {
 		case screenFetch:
 			body = m.viewport.View()
 		case screenInstallConfirm, screenInstallResult, screenRollbackConfirm, screenRollbackResult,
-			screenUninstallConfirm, screenUninstallResult, screenSteamLibrary, screenSteamLibraryConfirm,
-			screenSteamLibraryRemoveConfirm, screenSteamLibraryResult, screenPlatformAssetOverride,
+			screenUninstallConfirm, screenUninstallResult, screenPlatformAssetOverride,
 			screenPlatformAssetOverrideDetails, screenPlatformAssetOverrideFixConfirm,
-			screenPlatformAssetOverrideFixResult:
+			screenPlatformAssetOverrideFixResult, screenCompatdata, screenCompatdataPlan, screenCompatdataResult:
 			body = m.viewport.View()
 		case screenPlugins:
 			body = m.pluginsView()
@@ -743,14 +698,6 @@ func (m model) View() string {
 		footerText = textFooterRemoveConfirm
 	} else if m.screen == screenPlugins && !m.checking {
 		footerText = textFooterPlugins
-	} else if m.screen == screenSteamLibrary && !m.checking {
-		footerText = textFooterSteamLibraries
-	} else if m.screen == screenSteamLibraryConfirm && !m.checking {
-		footerText = textFooterSteamLibraryConfirm
-	} else if m.screen == screenSteamLibraryRemoveConfirm && !m.checking {
-		footerText = textFooterSteamLibraryRemove
-	} else if m.screen == screenSteamLibraryResult && !m.checking {
-		footerText = textFooterPluginResult
 	} else if m.screen == screenPlatformAssetOverride && !m.checking {
 		footerText = textFooterPlatformAssetOverride
 	} else if m.screen == screenPlatformAssetOverrideDetails && !m.checking {
@@ -759,6 +706,12 @@ func (m model) View() string {
 		footerText = textFooterPlatformAssetOverrideFixConfirm
 	} else if m.screen == screenPlatformAssetOverrideFixResult && !m.checking {
 		footerText = textFooterPlatformAssetOverrideFixResult
+	} else if m.screen == screenCompatdata && !m.checking {
+		footerText = textFooterCompatdata
+	} else if m.screen == screenCompatdataPlan && !m.checking {
+		footerText = textFooterCompatdataPlan
+	} else if m.screen == screenCompatdataResult && !m.checking {
+		footerText = textFooterResult
 	} else if (m.screen == screenInstallResult || m.screen == screenRollbackResult || m.screen == screenUninstallResult) && !m.checking {
 		footerText = textFooterResult
 	} else if m.mutating {
@@ -882,14 +835,6 @@ func (m *model) refreshViewport() {
 		content = m.uninstallConfirmContent()
 	case screenUninstallResult:
 		content = m.uninstallResultContent()
-	case screenSteamLibrary:
-		content = m.steamLibraryContent()
-	case screenSteamLibraryConfirm:
-		content = m.steamLibraryConfirmContent()
-	case screenSteamLibraryRemoveConfirm:
-		content = m.steamLibraryRemoveConfirmContent()
-	case screenSteamLibraryResult:
-		content = m.steamLibraryResultContent()
 	case screenPlatformAssetOverride:
 		content = m.platformAssetOverrideContent()
 	case screenPlatformAssetOverrideDetails:
@@ -898,6 +843,12 @@ func (m *model) refreshViewport() {
 		content = m.platformAssetOverrideFixConfirmContent()
 	case screenPlatformAssetOverrideFixResult:
 		content = m.platformAssetOverrideFixResultContent()
+	case screenCompatdata:
+		content = m.compatdataContent()
+	case screenCompatdataPlan:
+		content = m.compatdataPlanContent()
+	case screenCompatdataResult:
+		content = m.compatdataResultContent()
 	default:
 		return
 	}
@@ -970,118 +921,6 @@ func (m model) fetchContent() string {
 		b.WriteString("  " + mutedStyle.Render("sha256:"+compactHash(result.SHA256)) + "\n\n")
 	}
 	b.WriteString(mutedStyle.Render(textCacheOnly))
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func (m model) steamLibraryContent() string {
-	if m.err != nil {
-		return titleStyle.Render(textSteamLibraryTitle) + "\n\n" + errorStyle().Render("× "+m.err.Error())
-	}
-
-	var b strings.Builder
-	b.WriteString(titleStyle.Render(textSteamLibraryTitle))
-	b.WriteString("\n\n")
-	b.WriteString(textSteamLibraryIntro)
-	b.WriteString("\n\n")
-	if len(m.steamEntries) == 0 {
-		b.WriteString(mutedStyle.Render(textNoSteamLibraries))
-		b.WriteString("\n\n")
-		b.WriteString(mutedStyle.Render(textSteamLibraryMountHint))
-		return b.String()
-	}
-
-	for index, entry := range m.steamEntries {
-		cursor := "  "
-		style := lipgloss.NewStyle()
-		if index == m.steamCursor {
-			cursor = "› "
-			style = style.Bold(true).Foreground(accentColor)
-		}
-		if entry.kind == steamEntryLibrary {
-			b.WriteString(cursor + style.Render(textSteamLibraryAddLabel) + "\n")
-			b.WriteString("  " + entry.library.Path + "\n")
-			b.WriteString("  " + mutedStyle.Render(fmt.Sprintf(textSteamLibraryMetadataFormat, entry.library.Filesystem, entry.library.MountPoint)) + "\n")
-		} else {
-			b.WriteString(cursor + style.Render(textSteamLibraryManagedLabel) + "\n")
-			b.WriteString("  " + entry.link.Path + "\n")
-			b.WriteString("  " + mutedStyle.Render("→ "+entry.link.Target) + "\n")
-		}
-		b.WriteString("\n")
-	}
-	if entry, ok := m.currentSteamEntry(); ok {
-		if entry.kind == steamEntryLibrary {
-			b.WriteString(mutedStyle.Render(textSteamLibrarySelectHint))
-		} else {
-			b.WriteString(mutedStyle.Render(textSteamLibraryRemoveHint))
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func (m model) steamLibraryConfirmContent() string {
-	if m.selectedSteam.kind != steamEntryLibrary {
-		return titleStyle.Render(textSteamLibraryConfirmTitle) + "\n\n" + errorStyle().Render("× "+textNoSteamLibrarySelected)
-	}
-	library := m.selectedSteam.library
-	link := plugins.PlannedSteamLibraryLink(planner.Environment{
-		XDGDataHome: m.steamDataHome,
-	}, library)
-
-	var b strings.Builder
-	b.WriteString(titleStyle.Render(textSteamLibraryConfirmTitle))
-	b.WriteString("\n\n")
-	b.WriteString(textSteamLibraryConfirmIntro + "\n\n")
-	b.WriteString(textSteamLibrarySourceLabel + library.Path + "\n")
-	b.WriteString(textSteamLibraryMountLabel + library.MountPoint + "\n")
-	b.WriteString(textSteamLibraryLinkLabel + link.Path + "\n\n")
-	b.WriteString(textSteamLibrarySafety + "\n")
-	b.WriteString(textSteamLibrarySteamHint + "\n\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textSteamLibraryConfirmAction))
-	b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
-	return b.String()
-}
-
-func (m model) steamLibraryRemoveConfirmContent() string {
-	if m.selectedSteam.kind != steamEntryLink {
-		return titleStyle.Render(textSteamLibraryRemoveTitle) + "\n\n" + errorStyle().Render("× "+textNoSteamLibraryLinkSelected)
-	}
-	var b strings.Builder
-	b.WriteString(titleStyle.Render(textSteamLibraryRemoveTitle))
-	b.WriteString("\n\n")
-	b.WriteString(textSteamLibraryLinkLabel + m.selectedSteam.link.Path + "\n")
-	b.WriteString(textSteamLibrarySourceLabel + m.selectedSteam.link.Target + "\n\n")
-	b.WriteString(textSteamLibraryRemoveSafety + "\n\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(errorColor).Bold(true).Render(textSteamLibraryRemoveAction))
-	b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
-	return b.String()
-}
-
-func (m model) steamLibraryResultContent() string {
-	var b strings.Builder
-	b.WriteString(titleStyle.Render(textSteamLibraryResultTitle))
-	b.WriteString("\n\n")
-	if m.err != nil {
-		b.WriteString(errorStyle().Render("× " + m.err.Error()))
-		return b.String()
-	}
-	if m.steamResult == nil {
-		return b.String() + mutedStyle.Render(textNoSteamLibraryResult)
-	}
-	if m.steamRemoved {
-		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textSteamLibraryRemoved))
-	} else if m.steamResult.TransactionID == "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textSteamLibraryAlreadyLinked))
-	} else {
-		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textSteamLibraryLinked))
-	}
-	b.WriteString("\n")
-	b.WriteString(textSteamLibraryLinkLabel + m.steamResult.Link.Path + "\n")
-	b.WriteString(textSteamLibrarySourceLabel + m.steamResult.Link.Target + "\n")
-	if m.steamResult.TransactionID != "" {
-		b.WriteString(textTransactionLabel + m.steamResult.TransactionID + "\n")
-	}
-	b.WriteString("\n")
-	b.WriteString(mutedStyle.Render(textSteamLibraryResultHint))
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -1193,6 +1032,99 @@ func (m model) platformAssetOverrideFixResultContent() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(mutedStyle.Render(textPlatformAssetOverrideFixResultHint))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) compatdataContent() string {
+	if m.err != nil {
+		return titleStyle.Render(textCompatdataTitle) + "\n\n" + errorStyle().Render("× "+m.err.Error())
+	}
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textCompatdataTitle))
+	b.WriteString("\n\n")
+	b.WriteString(textCompatdataIntro)
+	b.WriteString("\n\n")
+	if len(m.compatPlans) == 0 {
+		b.WriteString(mutedStyle.Render(textNoCompatdataLibraries))
+		return b.String()
+	}
+	for index, plan := range m.compatPlans {
+		cursor := "  "
+		style := lipgloss.NewStyle()
+		if index == m.compatCursor {
+			cursor = "› "
+			style = style.Bold(true).Foreground(accentColor)
+		}
+		b.WriteString(cursor + style.Render(plan.Library.Path) + "\n")
+		b.WriteString("  " + mutedStyle.Render(fmt.Sprintf(textCompatdataMetadataFormat, plan.Library.Filesystem, plan.Library.MountPoint)) + "\n")
+		b.WriteString("  " + mutedStyle.Render(textCompatdataStateLabel+string(plan.CurrentState)) + "\n\n")
+	}
+	if _, ok := m.currentCompatdataPlan(); ok {
+		b.WriteString(mutedStyle.Render(textCompatdataSelectHint))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) compatdataPlanContent() string {
+	plan := m.selectedPlan
+	if plan.Library.Path == "" {
+		return titleStyle.Render(textCompatdataPlanTitle) + "\n\n" + mutedStyle.Render(textNoCompatdataPlan)
+	}
+	if m.err != nil {
+		return titleStyle.Render(textCompatdataPlanTitle) + "\n\n" + errorStyle().Render("× "+m.err.Error())
+	}
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textCompatdataPlanTitle))
+	b.WriteString("\n\n")
+	b.WriteString(textSteamLibrarySourceLabel + plan.Library.Path + "\n")
+	b.WriteString(textSteamLibraryMountLabel + plan.Library.MountPoint + "\n")
+	b.WriteString(textCompatdataCurrentLabel + plan.Compatdata + "\n")
+	b.WriteString(textCompatdataTargetLabel + plan.NativeTarget + "\n")
+	if plan.RequiresBackup {
+		b.WriteString(textCompatdataBackupLabel + plan.BackupPath + "\n")
+	}
+	b.WriteString("\n")
+	if plan.RequiresCopy {
+		b.WriteString(mutedStyle.Render(textCompatdataWillCopy))
+	} else {
+		b.WriteString(mutedStyle.Render(textCompatdataWillLink))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(textCompatdataSafety + "\n\n")
+	if plan.CurrentState == plugins.CompatdataDirectory || plan.CurrentState == plugins.CompatdataMissing {
+		b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textCompatdataMigrateAction))
+		b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
+	} else {
+		b.WriteString(mutedStyle.Render(textCompatdataNoMigrate))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) compatdataResultContent() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textCompatdataResultTitle))
+	b.WriteString("\n\n")
+	if m.err != nil {
+		b.WriteString(errorStyle().Render("× " + m.err.Error()))
+		return b.String()
+	}
+	if m.compatResult == nil {
+		return b.String() + mutedStyle.Render(textNoCompatdataResult)
+	}
+	plan := m.compatResult.Plan
+	if m.compatResult.TransactionID == "" {
+		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textCompatdataAlreadyMigrated))
+	} else {
+		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textCompatdataMigrated))
+	}
+	b.WriteString("\n")
+	b.WriteString(textCompatdataSourceLabel + plan.Compatdata + "\n")
+	b.WriteString(textCompatdataTargetLabel + plan.NativeTarget + "\n")
+	if m.compatResult.TransactionID != "" {
+		b.WriteString(textTransactionLabel + m.compatResult.TransactionID + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(textCompatdataResultHint))
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -1365,35 +1297,18 @@ func latestRestorable(history []transaction.Journal) *transaction.Journal {
 	return nil
 }
 
-func makeSteamEntries(libraries []plugins.SteamLibrary, links []plugins.Link) []steamEntry {
-	linkedTargets := make(map[string]bool, len(links))
-	for _, link := range links {
-		linkedTargets[filepath.Clean(link.Target)] = true
-	}
-	entries := make([]steamEntry, 0, len(libraries)+len(links))
-	for _, library := range libraries {
-		if !linkedTargets[filepath.Clean(library.Path)] {
-			entries = append(entries, steamEntry{kind: steamEntryLibrary, library: library})
-		}
-	}
-	for _, link := range links {
-		entries = append(entries, steamEntry{kind: steamEntryLink, link: link})
-	}
-	return entries
-}
-
-func (m model) currentSteamEntry() (steamEntry, bool) {
-	if m.steamCursor < 0 || m.steamCursor >= len(m.steamEntries) {
-		return steamEntry{}, false
-	}
-	return m.steamEntries[m.steamCursor], true
-}
-
 func (m model) currentSteamGame() (plugins.SteamGame, bool) {
 	if m.gameCursor < 0 || m.gameCursor >= len(m.steamGames) {
 		return plugins.SteamGame{}, false
 	}
 	return m.steamGames[m.gameCursor], true
+}
+
+func (m model) currentCompatdataPlan() (plugins.CompatdataPlan, bool) {
+	if m.compatCursor < 0 || m.compatCursor >= len(m.compatPlans) {
+		return plugins.CompatdataPlan{}, false
+	}
+	return m.compatPlans[m.compatCursor], true
 }
 
 func gameEngineLabel(engine plugins.GameEngine) string {
@@ -1552,43 +1467,6 @@ func uninstallBundle(ctx context.Context) tea.Cmd {
 	}
 }
 
-func scanSteamLibraries() tea.Cmd {
-	return func() tea.Msg {
-		env, err := planner.DetectEnvironment()
-		if err != nil {
-			return steamLibrariesMsg{err: err}
-		}
-		libraries, err := plugins.DiscoverSteamLibraries(env)
-		if err != nil {
-			return steamLibrariesMsg{err: err}
-		}
-		links, err := plugins.ManagedLinks(env)
-		return steamLibrariesMsg{libraries: libraries, links: links, dataHome: env.XDGDataHome, err: err}
-	}
-}
-
-func createSteamLibraryLink(library plugins.SteamLibrary) tea.Cmd {
-	return func() tea.Msg {
-		env, err := planner.DetectEnvironment()
-		if err != nil {
-			return steamLinkMsg{err: err}
-		}
-		result, err := plugins.CreateSteamLibraryLink(env, library)
-		return steamLinkMsg{result: result, err: err}
-	}
-}
-
-func removeSteamLibraryLink(link plugins.Link) tea.Cmd {
-	return func() tea.Msg {
-		env, err := planner.DetectEnvironment()
-		if err != nil {
-			return steamLinkMsg{removed: true, err: err}
-		}
-		result, err := plugins.RemoveSteamLibraryLink(env, link)
-		return steamLinkMsg{result: result, removed: true, err: err}
-	}
-}
-
 func scanSteamGames() tea.Cmd {
 	return func() tea.Msg {
 		env, err := planner.DetectEnvironment()
@@ -1597,6 +1475,39 @@ func scanSteamGames() tea.Cmd {
 		}
 		games, err := plugins.DiscoverSteamGames(env)
 		return steamGamesMsg{games: games, err: err}
+	}
+}
+
+func scanCompatdata() tea.Cmd {
+	return func() tea.Msg {
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return compatdataMsg{err: err}
+		}
+		libraries, err := plugins.DiscoverSteamLibraries(env)
+		if err != nil {
+			return compatdataMsg{err: err}
+		}
+		plans := make([]plugins.CompatdataPlan, 0, len(libraries))
+		for _, library := range libraries {
+			plan, planErr := plugins.PlanCompatdataMigration(env, library)
+			if planErr != nil {
+				continue
+			}
+			plans = append(plans, plan)
+		}
+		return compatdataMsg{plans: plans}
+	}
+}
+
+func applyCompatdataMigration(plan plugins.CompatdataPlan) tea.Cmd {
+	return func() tea.Msg {
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return compatdataApplyMsg{err: err}
+		}
+		result, err := plugins.ApplyCompatdataMigration(env, plan)
+		return compatdataApplyMsg{result: result, err: err}
 	}
 }
 
