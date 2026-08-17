@@ -10,8 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
-	"runtime"
 	"strings"
 	"time"
 
@@ -37,8 +35,12 @@ type CompatdataPlan struct {
 	Library      SteamLibrary
 	Compatdata   string
 	NativeTarget string
-	BackupPath   string
-	ImportSource string
+	// PreservedNativeTarget is populated when a previous rollback left data at
+	// the deterministic target. Apply atomically moves that data here before
+	// starting a fresh migration, so recovery never requires manual cleanup.
+	PreservedNativeTarget string
+	BackupPath            string
+	ImportSource          string
 
 	CurrentState      CompatdataState
 	LinkTarget        string
@@ -62,6 +64,8 @@ const (
 	compatdataName        = "compatdata"
 	backupPrefix          = "compatdata.selene-backup-"
 	compatdataJournalFile = "compatdata-migration.json"
+	nativeRollbackMarker  = ".selene-rollback-"
+	nativeTargetHasData   = "the native compatdata target already contains data; Selene will not merge into it"
 )
 
 type compatdataJournal struct {
@@ -80,15 +84,49 @@ func nativeTargetPath(env planner.Environment, library SteamLibrary) string {
 	return filepath.Join(NativeCompatdataRoot(env), libraryID(library))
 }
 
-// managedNativeTargetPaths includes the current UUID-based identity and the
-// source-hash identity used by the first version of this feature. Keeping the
-// latter lets Selene recognise and roll back existing managed links after an
-// upgrade instead of presenting them as unknown external links.
+// managedNativeTargetPaths includes the normalized UUID identity, historical
+// case-sensitive/source-hash identities, and the target recorded by the latest
+// committed journal. This keeps links created by earlier Selene builds fully
+// manageable after identity rules evolve.
 func managedNativeTargetPaths(env planner.Environment, library SteamLibrary) []string {
-	paths := []string{nativeTargetPath(env, library)}
-	legacy := filepath.Join(NativeCompatdataRoot(env), legacyLibraryID(library))
-	if legacy != paths[0] {
-		paths = append(paths, legacy)
+	var paths []string
+	for _, id := range []string{
+		libraryID(library),
+		caseSensitiveLibraryID(library),
+		legacyLibraryID(library),
+		caseSensitiveLegacyLibraryID(library),
+	} {
+		candidate := filepath.Join(NativeCompatdataRoot(env), id)
+		duplicate := false
+		for _, existing := range paths {
+			if filepath.Clean(existing) == filepath.Clean(candidate) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			paths = append(paths, candidate)
+		}
+	}
+	if journal, ok := latestCompatdataJournal(env, library); ok {
+		if tx, err := transaction.Open(stateRoot(env), journal.ID); err == nil {
+			if plan, err := loadCompatdataJournal(tx); err == nil {
+				candidate := filepath.Clean(plan.NativeTarget)
+				if filepath.Dir(candidate) != filepath.Clean(NativeCompatdataRoot(env)) {
+					return paths
+				}
+				duplicate := false
+				for _, existing := range paths {
+					if filepath.Clean(existing) == candidate {
+						duplicate = true
+						break
+					}
+				}
+				if !duplicate {
+					paths = append(paths, candidate)
+				}
+			}
+		}
 	}
 	return paths
 }
@@ -214,7 +252,11 @@ func PlanCompatdataMigration(env planner.Environment, library SteamLibrary) (Com
 			}
 		}
 		if reason := nativeTargetConflict(plan.NativeTarget); reason != "" && plan.BlockedReason == "" {
-			plan.BlockedReason = reason
+			if journal, ok := rolledBackCompatdataJournal(env, library, plan.NativeTarget); ok && reason == nativeTargetHasData {
+				plan.PreservedNativeTarget = availablePreservedNativeTarget(plan.NativeTarget, journal.ID)
+			} else {
+				plan.BlockedReason = reason
+			}
 		}
 	} else if state == CompatdataManagedLink && plan.RollbackAvailable {
 		if mount, ok, resolveErr := findMountForResolvedPath(mounts, library.Path); resolveErr != nil {
@@ -242,7 +284,7 @@ func ApplyCompatdataMigration(env planner.Environment, plan CompatdataPlan) (Com
 		return CompatdataResult{}, errors.New(freshPlan.BlockedReason)
 	}
 	if freshPlan.CurrentState != plan.CurrentState && freshPlan.CurrentState != CompatdataManagedLink {
-		return CompatdataResult{}, errors.New("compatdata changed after confirmation; review the migration plan again")
+		return CompatdataResult{}, errors.New("compatdata changed after confirmation; review the setup plan again")
 	}
 	if plan.CurrentState == CompatdataExternalLink &&
 		!samePath(plan.ImportSource, freshPlan.ImportSource) {
@@ -262,7 +304,7 @@ func ApplyCompatdataMigration(env planner.Environment, plan CompatdataPlan) (Com
 	case CompatdataManagedLink:
 		return CompatdataResult{Plan: freshPlan}, nil
 	case CompatdataInvalid:
-		return CompatdataResult{}, errors.New("compatdata is a regular file; refusing to migrate")
+		return CompatdataResult{}, errors.New("compatdata is a regular file; refusing to configure it")
 	}
 
 	if state == CompatdataDirectory && !freshPlan.RequiresCopy {
@@ -284,7 +326,7 @@ func ApplyCompatdataMigration(env planner.Environment, plan CompatdataPlan) (Com
 
 	// Ensure Steam is not running before mutating.
 	if steamRunning() {
-		return CompatdataResult{}, errors.New("close Steam completely before migrating compatdata")
+		return CompatdataResult{}, errors.New("Steam started again; close it before configuring compatdata")
 	}
 
 	tx, err := transaction.Begin(stateRoot(env), compatdataMigrationDescription(freshPlan.Library), []transaction.Target{
@@ -295,11 +337,19 @@ func ApplyCompatdataMigration(env planner.Environment, plan CompatdataPlan) (Com
 	}
 
 	if err := persistCompatdataJournal(tx, freshPlan); err != nil {
-		return CompatdataResult{}, abort(tx, err)
+		return CompatdataResult{}, abortCompatdataMigration(tx, freshPlan, false, err)
+	}
+
+	preservedNativeTarget := false
+	if freshPlan.PreservedNativeTarget != "" {
+		if err := moveNativeTarget(freshPlan.NativeTarget, freshPlan.PreservedNativeTarget); err != nil {
+			return CompatdataResult{}, abortCompatdataMigration(tx, freshPlan, false, err)
+		}
+		preservedNativeTarget = true
 	}
 
 	if err := os.MkdirAll(freshPlan.NativeTarget, 0o700); err != nil {
-		return CompatdataResult{}, abort(tx, fmt.Errorf("create native compatdata target: %w", err))
+		return CompatdataResult{}, abortCompatdataMigration(tx, freshPlan, preservedNativeTarget, fmt.Errorf("create native compatdata target: %w", err))
 	}
 
 	if freshPlan.RequiresCopy {
@@ -308,38 +358,38 @@ func ApplyCompatdataMigration(env planner.Environment, plan CompatdataPlan) (Com
 			copySource = freshPlan.ImportSource
 		}
 		if err := copyCompatdata(copySource, freshPlan.NativeTarget); err != nil {
-			return CompatdataResult{}, abort(tx, fmt.Errorf("copy compatdata: %w", err))
+			return CompatdataResult{}, abortCompatdataMigration(tx, freshPlan, preservedNativeTarget, fmt.Errorf("copy compatdata: %w", err))
 		}
 		if err := verifyCopy(copySource, freshPlan.NativeTarget); err != nil {
-			return CompatdataResult{}, abort(tx, fmt.Errorf("verify copied compatdata: %w", err))
+			return CompatdataResult{}, abortCompatdataMigration(tx, freshPlan, preservedNativeTarget, fmt.Errorf("verify copied compatdata: %w", err))
 		}
 	}
 
 	if state == CompatdataDirectory && freshPlan.RequiresBackup {
 		if err := os.Rename(freshPlan.Compatdata, freshPlan.BackupPath); err != nil {
-			return CompatdataResult{}, abort(tx, fmt.Errorf("back up original compatdata: %w", err))
+			return CompatdataResult{}, abortCompatdataMigration(tx, freshPlan, preservedNativeTarget, fmt.Errorf("back up original compatdata: %w", err))
 		}
 	}
 	if freshPlan.DetachesExistingLink {
 		if err := removeExistingCompatdataLink(freshPlan.Compatdata); err != nil {
-			return CompatdataResult{}, abort(tx, err)
+			return CompatdataResult{}, abortCompatdataMigration(tx, freshPlan, preservedNativeTarget, err)
 		}
 	}
 
 	if err := os.Symlink(freshPlan.NativeTarget, freshPlan.Compatdata); err != nil {
-		return CompatdataResult{}, abort(tx, fmt.Errorf("create compatdata symlink: %w", err))
+		return CompatdataResult{}, abortCompatdataMigration(tx, freshPlan, preservedNativeTarget, fmt.Errorf("create compatdata symlink: %w", err))
 	}
 
 	if err := verifyLink(freshPlan.Compatdata, freshPlan.NativeTarget); err != nil {
-		return CompatdataResult{}, abort(tx, err)
+		return CompatdataResult{}, abortCompatdataMigration(tx, freshPlan, preservedNativeTarget, err)
 	}
 
 	if err := writeProbe(freshPlan.Compatdata, freshPlan.NativeTarget); err != nil {
-		return CompatdataResult{}, abort(tx, fmt.Errorf("verify compatdata write path: %w", err))
+		return CompatdataResult{}, abortCompatdataMigration(tx, freshPlan, preservedNativeTarget, fmt.Errorf("verify compatdata write path: %w", err))
 	}
 
 	if err := tx.Commit(); err != nil {
-		return CompatdataResult{}, abort(tx, fmt.Errorf("commit compatdata migration: %w", err))
+		return CompatdataResult{}, abortCompatdataMigration(tx, freshPlan, preservedNativeTarget, fmt.Errorf("commit compatdata setup: %w", err))
 	}
 
 	return CompatdataResult{
@@ -356,7 +406,7 @@ func RollbackCompatdataMigration(env planner.Environment, transactionID string) 
 		return CompatdataResult{}, err
 	}
 	if steamRunning() {
-		return CompatdataResult{}, errors.New("close Steam completely before rolling back compatdata")
+		return CompatdataResult{}, errors.New("Steam started again; close it before restoring compatdata")
 	}
 	tx, err := transaction.Open(stateRoot(env), transactionID)
 	if err != nil {
@@ -367,7 +417,7 @@ func RollbackCompatdataMigration(env planner.Environment, transactionID string) 
 		return CompatdataResult{}, err
 	}
 	if tx.Journal.Description != compatdataMigrationDescription(plan.Library) {
-		return CompatdataResult{}, errors.New("transaction is not a Selene compatdata migration")
+		return CompatdataResult{}, errors.New("transaction is not a Selene compatdata setup")
 	}
 	if err := validateLibrary(plan.Library); err != nil {
 		return CompatdataResult{}, err
@@ -380,7 +430,7 @@ func RollbackCompatdataMigration(env planner.Environment, transactionID string) 
 		return CompatdataResult{}, err
 	}
 	if state != CompatdataManagedLink || !samePath(resolveLinkTarget(plan.Compatdata, linkTarget), plan.NativeTarget) {
-		return CompatdataResult{}, errors.New("compatdata no longer points to this Selene migration; refusing rollback")
+		return CompatdataResult{}, errors.New("compatdata no longer points to this Selene setup; refusing restore")
 	}
 	if plan.RequiresBackup {
 		if err := validateCompatdataBackup(plan.BackupPath); err != nil {
@@ -388,13 +438,18 @@ func RollbackCompatdataMigration(env planner.Environment, transactionID string) 
 		}
 	}
 	if err := tx.Rollback(); err != nil {
-		return CompatdataResult{}, fmt.Errorf("roll back compatdata migration: %w", err)
+		return CompatdataResult{}, fmt.Errorf("restore compatdata setup: %w", err)
 	}
 	if plan.RequiresBackup {
 		if err := restoreCompatdataBackup(plan); err != nil {
 			return CompatdataResult{}, err
 		}
 	}
+	preserved := availablePreservedNativeTarget(plan.NativeTarget, tx.Journal.ID)
+	if err := moveNativeTarget(plan.NativeTarget, preserved); err != nil {
+		return CompatdataResult{}, fmt.Errorf("preserve native compatdata after rollback: %w", err)
+	}
+	plan.PreservedNativeTarget = preserved
 	return CompatdataResult{
 		Plan:          plan,
 		TransactionID: tx.Journal.ID,
@@ -410,7 +465,7 @@ func RollbackLatestCompatdataMigration(env planner.Environment, library SteamLib
 		return CompatdataResult{}, err
 	}
 	if steamRunning() {
-		return CompatdataResult{}, errors.New("close Steam completely before rolling back compatdata")
+		return CompatdataResult{}, errors.New("Steam started again; close it before restoring compatdata")
 	}
 	if journal, ok := latestCompatdataJournal(env, library); ok {
 		return RollbackCompatdataMigration(env, journal.ID)
@@ -444,6 +499,11 @@ func RollbackLatestCompatdataMigration(env planner.Environment, library SteamLib
 	if err := restoreLegacyCompatdataBackup(plan); err != nil {
 		return CompatdataResult{}, err
 	}
+	preserved := availablePreservedNativeTarget(plan.NativeTarget, time.Now().UTC().Format("20060102T150405Z"))
+	if err := moveNativeTarget(plan.NativeTarget, preserved); err != nil {
+		return CompatdataResult{}, fmt.Errorf("preserve native compatdata after rollback: %w", err)
+	}
+	plan.PreservedNativeTarget = preserved
 	return CompatdataResult{Plan: plan}, nil
 }
 
@@ -465,41 +525,147 @@ func availableBackupPath(library SteamLibrary) string {
 	}
 }
 
+func availablePreservedNativeTarget(path, rollbackID string) string {
+	base := filepath.Clean(path) + nativeRollbackMarker + rollbackID
+	for suffix := 0; ; suffix++ {
+		candidate := base
+		if suffix > 0 {
+			candidate = fmt.Sprintf("%s-%d", base, suffix)
+		}
+		if _, err := os.Lstat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate
+		} else if err != nil {
+			return candidate
+		}
+	}
+}
+
+// moveNativeTarget archives a native compatdata tree with one same-filesystem
+// rename. It deliberately refuses links and cross-directory destinations so a
+// stale or edited journal cannot expand the mutation scope.
+func moveNativeTarget(source, destination string) error {
+	source = filepath.Clean(source)
+	destination = filepath.Clean(destination)
+	if !filepath.IsAbs(source) || !filepath.IsAbs(destination) || filepath.Dir(source) != filepath.Dir(destination) || source == destination {
+		return errors.New("invalid native compatdata preservation path")
+	}
+	info, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("inspect native compatdata target: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("native compatdata target is not a directory; refusing to preserve it")
+	}
+	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			return fmt.Errorf("native compatdata preservation path already exists: %s", destination)
+		}
+		return fmt.Errorf("inspect native compatdata preservation path: %w", err)
+	}
+	if err := os.Rename(source, destination); err != nil {
+		return fmt.Errorf("archive native compatdata target: %w", err)
+	}
+	return nil
+}
+
+func restorePreservedNativeTarget(plan CompatdataPlan) error {
+	if plan.PreservedNativeTarget == "" {
+		return nil
+	}
+	target := filepath.Clean(plan.NativeTarget)
+	preserved := filepath.Clean(plan.PreservedNativeTarget)
+	if filepath.Dir(target) != filepath.Dir(preserved) || target == preserved {
+		return errors.New("invalid preserved native compatdata recovery path")
+	}
+	if info, err := os.Lstat(target); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("replacement native compatdata target changed type; refusing recovery")
+		}
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("remove incomplete native compatdata replacement: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect incomplete native compatdata replacement: %w", err)
+	}
+	if err := os.Rename(preserved, target); err != nil {
+		return fmt.Errorf("restore preserved native compatdata target: %w", err)
+	}
+	return nil
+}
+
+func abortCompatdataMigration(tx *transaction.Transaction, plan CompatdataPlan, preservedNativeTarget bool, cause error) error {
+	_ = tx.MarkFailed(cause)
+	if rollbackErr := tx.Rollback(); rollbackErr != nil {
+		return fmt.Errorf("%w; plugin rollback also failed: %v", cause, rollbackErr)
+	}
+	if preservedNativeTarget {
+		if restoreErr := restorePreservedNativeTarget(plan); restoreErr != nil {
+			return fmt.Errorf("%w; preserved native compatdata recovery also failed: %v", cause, restoreErr)
+		}
+	}
+	return cause
+}
+
 // libraryID derives a stable identifier from the library's absolute path,
 // preferring the filesystem UUID when it can be resolved.
 func libraryID(library SteamLibrary) string {
+	return filesystemLibraryID(library, false, false)
+}
+
+// caseSensitiveLibraryID preserves the UUID-based identifier emitted before
+// NTFS paths were normalized. It is recognition-only compatibility for links
+// already created with a differently-cased path from libraryfolders.vdf.
+func caseSensitiveLibraryID(library SteamLibrary) string {
+	return filesystemLibraryID(library, false, true)
+}
+
+func filesystemLibraryID(library SteamLibrary, legacySource, preserveCase bool) string {
 	mounts, err := readMounts()
 	if err == nil {
 		if mount, ok := findMountFor(mounts, library.Path); ok {
-			if id := resolveFilesystemID(mount); id != "" {
-				return libraryIDWithFilesystem(library, mount.point, id)
+			id := resolveFilesystemID(mount)
+			if legacySource {
+				id = sourceHash(mount.source)
+			}
+			if id != "" {
+				return libraryIDWithFilesystemCase(library, mount.point, id, preserveCase)
 			}
 		}
 	}
-	digest := sha256.Sum256([]byte(filepath.Clean(library.Path)))
+	path := filepath.Clean(library.Path)
+	if isNTFS(library.Filesystem) && !preserveCase {
+		path = strings.ToLower(path)
+	}
+	digest := sha256.Sum256([]byte(path))
 	return hex.EncodeToString(digest[:8])
 }
 
 // legacyLibraryID preserves the identity format used before Selene looked up
 // the filesystem UUID. It is only used to recognise already-created links.
 func legacyLibraryID(library SteamLibrary) string {
-	mounts, err := readMounts()
-	if err == nil {
-		if mount, ok := findMountFor(mounts, library.Path); ok {
-			if sourceID := sourceHash(mount.source); sourceID != "" {
-				return libraryIDWithFilesystem(library, mount.point, sourceID)
-			}
-		}
-	}
-	digest := sha256.Sum256([]byte(filepath.Clean(library.Path)))
-	return hex.EncodeToString(digest[:8])
+	return filesystemLibraryID(library, true, false)
+}
+
+func caseSensitiveLegacyLibraryID(library SteamLibrary) string {
+	return filesystemLibraryID(library, true, true)
 }
 
 func libraryIDWithFilesystem(library SteamLibrary, mountPoint, filesystemID string) string {
+	return libraryIDWithFilesystemCase(library, mountPoint, filesystemID, false)
+}
+
+func libraryIDWithFilesystemCase(library SteamLibrary, mountPoint, filesystemID string, preserveCase bool) string {
 	relative, err := filepath.Rel(mountPoint, library.Path)
 	if err != nil {
-		digest := sha256.Sum256([]byte(filepath.Clean(library.Path)))
+		path := filepath.Clean(library.Path)
+		if isNTFS(library.Filesystem) && !preserveCase {
+			path = strings.ToLower(path)
+		}
+		digest := sha256.Sum256([]byte(path))
 		return hex.EncodeToString(digest[:8])
+	}
+	if isNTFS(library.Filesystem) && !preserveCase {
+		relative = strings.ToLower(relative)
 	}
 	digest := sha256.Sum256([]byte(filepath.Clean(relative)))
 	return filesystemID + "-" + hex.EncodeToString(digest[:4])
@@ -645,7 +811,7 @@ func nativeTargetConflict(path string) string {
 		return fmt.Sprintf("read native compatdata target: %v", err)
 	}
 	if len(entries) > 0 {
-		return "the native compatdata target already contains data; Selene will not merge into it"
+		return nativeTargetHasData
 	}
 	return ""
 }
@@ -684,16 +850,16 @@ func compatdataMigrationDescription(library SteamLibrary) string {
 func persistCompatdataJournal(tx *transaction.Transaction, plan CompatdataPlan) error {
 	data, err := json.MarshalIndent(compatdataJournal{SchemaVersion: 1, Plan: plan}, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode compatdata migration metadata: %w", err)
+		return fmt.Errorf("encode compatdata setup metadata: %w", err)
 	}
 	data = append(data, '\n')
 	path := filepath.Join(tx.Journal.Root, compatdataJournalFile)
 	temporary := path + ".tmp"
 	if err := os.WriteFile(temporary, data, 0o600); err != nil {
-		return fmt.Errorf("write compatdata migration metadata: %w", err)
+		return fmt.Errorf("write compatdata setup metadata: %w", err)
 	}
 	if err := os.Rename(temporary, path); err != nil {
-		return fmt.Errorf("activate compatdata migration metadata: %w", err)
+		return fmt.Errorf("activate compatdata setup metadata: %w", err)
 	}
 	return nil
 }
@@ -701,19 +867,19 @@ func persistCompatdataJournal(tx *transaction.Transaction, plan CompatdataPlan) 
 func loadCompatdataJournal(tx *transaction.Transaction) (CompatdataPlan, error) {
 	data, err := os.ReadFile(filepath.Join(tx.Journal.Root, compatdataJournalFile))
 	if err != nil {
-		return CompatdataPlan{}, fmt.Errorf("read compatdata migration metadata: %w", err)
+		return CompatdataPlan{}, fmt.Errorf("read compatdata setup metadata: %w", err)
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
 	var journal compatdataJournal
 	if err := decoder.Decode(&journal); err != nil {
-		return CompatdataPlan{}, fmt.Errorf("decode compatdata migration metadata: %w", err)
+		return CompatdataPlan{}, fmt.Errorf("decode compatdata setup metadata: %w", err)
 	}
 	if journal.SchemaVersion != 1 || journal.Plan.Library.Path == "" || journal.Plan.Compatdata == "" || journal.Plan.NativeTarget == "" {
-		return CompatdataPlan{}, errors.New("invalid compatdata migration metadata")
+		return CompatdataPlan{}, errors.New("invalid compatdata setup metadata")
 	}
 	if filepath.Clean(journal.Plan.Compatdata) != filepath.Clean(CompatdataPath(journal.Plan.Library)) {
-		return CompatdataPlan{}, errors.New("compatdata migration metadata has an invalid source path")
+		return CompatdataPlan{}, errors.New("compatdata setup metadata has an invalid source path")
 	}
 	return journal.Plan, nil
 }
@@ -724,18 +890,63 @@ func latestCompatdataJournal(env planner.Environment, library SteamLibrary) (tra
 		return transaction.Journal{}, false
 	}
 	for _, journal := range journals {
-		if journal.State != transaction.StateCommitted || journal.Description != compatdataMigrationDescription(library) {
+		if journal.State != transaction.StateCommitted {
 			continue
 		}
 		tx, openErr := transaction.Open(stateRoot(env), journal.ID)
 		if openErr != nil {
 			continue
 		}
-		if _, metadataErr := loadCompatdataJournal(tx); metadataErr == nil {
+		plan, metadataErr := loadCompatdataJournal(tx)
+		if metadataErr == nil && journal.Description == compatdataMigrationDescription(plan.Library) && sameSteamLibrary(plan.Library, library) {
 			return journal, true
 		}
 	}
 	return transaction.Journal{}, false
+}
+
+func rolledBackCompatdataJournal(env planner.Environment, library SteamLibrary, nativeTarget string) (transaction.Journal, bool) {
+	journals, err := transaction.List(stateRoot(env))
+	if err != nil {
+		return transaction.Journal{}, false
+	}
+	for _, journal := range journals {
+		if journal.State != transaction.StateRolledBack {
+			continue
+		}
+		tx, openErr := transaction.Open(stateRoot(env), journal.ID)
+		if openErr != nil {
+			continue
+		}
+		plan, metadataErr := loadCompatdataJournal(tx)
+		if metadataErr == nil && journal.Description == compatdataMigrationDescription(plan.Library) &&
+			sameSteamLibrary(plan.Library, library) && samePath(plan.NativeTarget, nativeTarget) {
+			return journal, true
+		}
+	}
+	return transaction.Journal{}, false
+}
+
+func sameSteamLibrary(left, right SteamLibrary) bool {
+	leftMount := filepath.Clean(left.MountPoint)
+	rightMount := filepath.Clean(right.MountPoint)
+	if left.MountPoint != "" && right.MountPoint != "" && leftMount != rightMount {
+		return false
+	}
+	if leftMount == rightMount {
+		leftRelative, leftErr := filepath.Rel(leftMount, filepath.Clean(left.Path))
+		rightRelative, rightErr := filepath.Rel(rightMount, filepath.Clean(right.Path))
+		if leftErr == nil && rightErr == nil {
+			if isNTFS(left.Filesystem) && isNTFS(right.Filesystem) {
+				return strings.EqualFold(leftRelative, rightRelative)
+			}
+			return leftRelative == rightRelative
+		}
+	}
+	if isNTFS(left.Filesystem) && isNTFS(right.Filesystem) {
+		return strings.EqualFold(filepath.Clean(left.Path), filepath.Clean(right.Path))
+	}
+	return filepath.Clean(left.Path) == filepath.Clean(right.Path)
 }
 
 func compatdataRollbackBackup(env planner.Environment, library SteamLibrary) (string, bool) {
@@ -911,7 +1122,7 @@ func verifyLink(link, target string) error {
 		return fmt.Errorf("inspect compatdata link: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
-		return errors.New("compatdata is not a symlink after migration")
+		return errors.New("compatdata is not a symlink after setup")
 	}
 	read, err := os.Readlink(link)
 	if err != nil {
@@ -963,69 +1174,4 @@ func copyRegularFileAtomic(source, destination string, mode fs.FileMode) error {
 		return err
 	}
 	return output.Close()
-}
-
-// steamRunning reports whether a Steam process belonging to the current user
-// is running, as a best effort check.
-func steamRunning() bool {
-	if runtime.GOOS != "linux" {
-		return false
-	}
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return false
-	}
-	uid := os.Geteuid()
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		if !allDigits(entry.Name()) {
-			continue
-		}
-		if !processOwnedByUser(entry.Name(), uid) {
-			continue
-		}
-		cmdline, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "comm"))
-		if err != nil {
-			continue
-		}
-		name := strings.TrimSpace(string(cmdline))
-		if name == "steam" || name == "steamwebhelper" {
-			return true
-		}
-	}
-	return false
-}
-
-func allDigits(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-// processOwnedByUser reports whether /proc/<pid> is owned by uid.
-func processOwnedByUser(pid string, uid int) bool {
-	if runtime.GOOS != "linux" {
-		return false
-	}
-	info, err := os.Stat("/proc/" + pid)
-	if err != nil {
-		return false
-	}
-	value := reflect.ValueOf(info.Sys())
-	if value.Kind() == reflect.Pointer {
-		value = value.Elem()
-	}
-	uidField := value.FieldByName("Uid")
-	if !uidField.IsValid() || !uidField.CanUint() {
-		return false
-	}
-	return int(uidField.Uint()) == uid
 }

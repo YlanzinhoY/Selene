@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/selene-linux/selene/internal/planner"
+	"github.com/selene-linux/selene/internal/transaction"
 )
 
 // These tests use real Linux symbolic links, but keep the NTFS volume fully
@@ -16,9 +17,7 @@ import (
 // like an ntfs3 mount while every mutation remains inside the test directory.
 
 func TestCompatdataE2EMigrateAndRollbackConfiguredNTFSLibrary(t *testing.T) {
-	if steamRunning() {
-		t.Skip("Steam is running; compatdata migration deliberately refuses to mutate while it is open")
-	}
+	stubSteamClosed(t)
 	fixture := newCompatdataE2EFixture(t)
 
 	libraries := discoverSteamLibraries(fixture.env, fixture.mounts)
@@ -65,16 +64,34 @@ func TestCompatdataE2EMigrateAndRollbackConfiguredNTFSLibrary(t *testing.T) {
 	}
 	assertCompatdataDirectory(t, result.Plan.Compatdata)
 	assertFile(t, filepath.Join(result.Plan.Compatdata, "620", "pfx", "drive_c", "save.dat"), "original prefix")
-	assertFile(t, filepath.Join(result.Plan.NativeTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
+	if rollback.Plan.PreservedNativeTarget == "" {
+		t.Fatal("rollback did not return the preserved native prefix path")
+	}
+	assertFile(t, filepath.Join(rollback.Plan.PreservedNativeTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
+	if _, statErr := os.Lstat(result.Plan.NativeTarget); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("stable native target should be available after rollback: %v", statErr)
+	}
 	if _, statErr := os.Lstat(result.Plan.BackupPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("backup should have been renamed back to compatdata, stat error = %v", statErr)
 	}
+
+	retryPlan, err := PlanCompatdataMigration(fixture.env, libraries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retryPlan.BlockedReason != "" || retryPlan.PreservedNativeTarget != "" || retryPlan.NativeTarget != result.Plan.NativeTarget {
+		t.Fatalf("migration plan after rollback = %#v", retryPlan)
+	}
+	retry, err := ApplyCompatdataMigration(fixture.env, retryPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCompatdataLink(t, retry.Plan.Compatdata, retry.Plan.NativeTarget)
+	assertFile(t, filepath.Join(retry.Plan.NativeTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
 }
 
 func TestCompatdataE2ERollsBackExistingManagedLinkWithLegacyBackup(t *testing.T) {
-	if steamRunning() {
-		t.Skip("Steam is running; compatdata rollback deliberately refuses to mutate while it is open")
-	}
+	stubSteamClosed(t)
 	fixture := newCompatdataE2EFixture(t)
 	compatdata := CompatdataPath(fixture.library)
 	backup := filepath.Join(filepath.Dir(compatdata), backupPrefix+"20260817-120000")
@@ -97,20 +114,25 @@ func TestCompatdataE2ERollsBackExistingManagedLinkWithLegacyBackup(t *testing.T)
 		t.Fatalf("existing-link plan = %#v", plan)
 	}
 
-	if _, err := RollbackLatestCompatdataMigration(fixture.env, fixture.library); err != nil {
+	rollback, err := RollbackLatestCompatdataMigration(fixture.env, fixture.library)
+	if err != nil {
 		t.Fatal(err)
 	}
 	assertCompatdataDirectory(t, compatdata)
 	assertFile(t, filepath.Join(compatdata, "620", "pfx", "drive_c", "save.dat"), "original prefix")
-	if info, err := os.Lstat(nativeTarget); err != nil || !info.IsDir() {
-		t.Fatalf("native compatdata target should be preserved: %v, %v", info, err)
+	if rollback.Plan.PreservedNativeTarget == "" {
+		t.Fatal("legacy rollback did not report its preserved target")
+	}
+	if info, err := os.Lstat(rollback.Plan.PreservedNativeTarget); err != nil || !info.IsDir() {
+		t.Fatalf("legacy native target was not preserved: %v, %v", info, err)
+	}
+	if _, err := os.Lstat(nativeTarget); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stable native target should be free after legacy rollback: %v", err)
 	}
 }
 
 func TestCompatdataE2EImportsManualLinkAndRestoresItOnRollback(t *testing.T) {
-	if steamRunning() {
-		t.Skip("Steam is running; compatdata migration deliberately refuses to mutate while it is open")
-	}
+	stubSteamClosed(t)
 	fixture := newCompatdataE2EFixture(t)
 	compatdata := CompatdataPath(fixture.library)
 	manualTarget := filepath.Join(fixture.env.Home, "manual-compatdata")
@@ -150,18 +172,20 @@ func TestCompatdataE2EImportsManualLinkAndRestoresItOnRollback(t *testing.T) {
 		t.Fatalf("managed manual-link plan = %#v", managedPlan)
 	}
 
-	if _, err := RollbackLatestCompatdataMigration(fixture.env, fixture.library); err != nil {
+	rollback, err := RollbackLatestCompatdataMigration(fixture.env, fixture.library)
+	if err != nil {
 		t.Fatal(err)
 	}
 	assertCompatdataLink(t, compatdata, manualTarget)
 	assertFile(t, filepath.Join(manualTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
-	assertFile(t, filepath.Join(result.Plan.NativeTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
+	assertFile(t, filepath.Join(rollback.Plan.PreservedNativeTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
+	if _, err := os.Lstat(result.Plan.NativeTarget); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stable native target should be free after manual-link rollback: %v", err)
+	}
 }
 
 func TestCompatdataE2EReplacesBrokenManualLinkAndRestoresItOnRollback(t *testing.T) {
-	if steamRunning() {
-		t.Skip("Steam is running; compatdata migration deliberately refuses to mutate while it is open")
-	}
+	stubSteamClosed(t)
 	fixture := newCompatdataE2EFixture(t)
 	compatdata := CompatdataPath(fixture.library)
 	brokenTarget := filepath.Join(fixture.env.Home, "missing-compatdata")
@@ -185,7 +209,8 @@ func TestCompatdataE2EReplacesBrokenManualLinkAndRestoresItOnRollback(t *testing
 	}
 	assertCompatdataLink(t, compatdata, result.Plan.NativeTarget)
 
-	if _, err := RollbackLatestCompatdataMigration(fixture.env, fixture.library); err != nil {
+	rollback, err := RollbackLatestCompatdataMigration(fixture.env, fixture.library)
+	if err != nil {
 		t.Fatal(err)
 	}
 	readTarget, err := os.Readlink(compatdata)
@@ -194,6 +219,65 @@ func TestCompatdataE2EReplacesBrokenManualLinkAndRestoresItOnRollback(t *testing
 	}
 	if _, err := filepath.EvalSymlinks(compatdata); err == nil {
 		t.Fatal("rollback should restore the original broken link exactly")
+	}
+	if info, err := os.Lstat(rollback.Plan.PreservedNativeTarget); err != nil || !info.IsDir() {
+		t.Fatalf("native target from broken-link migration was not preserved: %v, %v", info, err)
+	}
+}
+
+func TestCompatdataE2EAutomaticallyRecoversTargetLeftByOlderRollback(t *testing.T) {
+	stubSteamClosed(t)
+	fixture := newCompatdataE2EFixture(t)
+	plan, err := PlanCompatdataMigration(fixture.env, fixture.library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ApplyCompatdataMigration(fixture.env, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Reproduce the behavior of Selene versions that restored compatdata but
+	// deliberately left the native tree at its deterministic path.
+	tx, err := transaction.Open(stateRoot(fixture.env), result.TransactionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreCompatdataBackup(result.Plan); err != nil {
+		t.Fatal(err)
+	}
+	newerNativeFile := filepath.Join(result.Plan.NativeTarget, "620", "pfx", "drive_c", "save.dat")
+	if err := os.WriteFile(newerNativeFile, []byte("newer preserved prefix"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	recoveryPlan, err := PlanCompatdataMigration(fixture.env, fixture.library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveryPlan.BlockedReason != "" || recoveryPlan.PreservedNativeTarget == "" {
+		t.Fatalf("automatic legacy recovery plan = %#v", recoveryPlan)
+	}
+	recovery, err := ApplyCompatdataMigration(fixture.env, recoveryPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCompatdataLink(t, recovery.Plan.Compatdata, recovery.Plan.NativeTarget)
+	assertFile(t, filepath.Join(recovery.Plan.NativeTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
+	assertFile(t, filepath.Join(recovery.Plan.PreservedNativeTarget, "620", "pfx", "drive_c", "save.dat"), "newer preserved prefix")
+
+	secondRollback, err := RollbackLatestCompatdataMigration(fixture.env, fixture.library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCompatdataDirectory(t, recovery.Plan.Compatdata)
+	assertFile(t, filepath.Join(recovery.Plan.PreservedNativeTarget, "620", "pfx", "drive_c", "save.dat"), "newer preserved prefix")
+	assertFile(t, filepath.Join(secondRollback.Plan.PreservedNativeTarget, "620", "pfx", "drive_c", "save.dat"), "original prefix")
+	if secondRollback.Plan.PreservedNativeTarget == recovery.Plan.PreservedNativeTarget {
+		t.Fatal("the new rollback overwrote the native copy preserved from the older rollback")
 	}
 }
 

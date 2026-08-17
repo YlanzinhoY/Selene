@@ -41,6 +41,7 @@ const (
 	screenPlatformAssetOverrideFixResult
 	screenCompatdata
 	screenCompatdataPlan
+	screenCompatdataSteamConfirm
 	screenCompatdataResult
 	screenAbout
 )
@@ -118,6 +119,18 @@ type compatdataApplyMsg struct {
 	err        error
 }
 
+type compatdataSteamClosedMsg struct {
+	err error
+}
+
+type compatdataPendingAction int
+
+const (
+	compatdataActionNone compatdataPendingAction = iota
+	compatdataActionConfigure
+	compatdataActionRestore
+)
+
 type menuItem struct {
 	title       string
 	description string
@@ -158,6 +171,8 @@ type model struct {
 	selectedPlan     plugins.CompatdataPlan
 	compatResult     *plugins.CompatdataResult
 	compatRolledBack bool
+	compatPending    compatdataPendingAction
+	steamRunning     func() bool
 }
 
 var (
@@ -188,12 +203,13 @@ func newModel() model {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(accentColor)
 	return model{
-		ctx:         ctx,
-		cancel:      cancel,
-		spinner:     s,
-		viewport:    viewport.New(80, 15),
-		items:       defaultMenuItems(),
-		pluginItems: defaultPluginItems(),
+		ctx:          ctx,
+		cancel:       cancel,
+		spinner:      s,
+		viewport:     viewport.New(80, 15),
+		items:        defaultMenuItems(),
+		pluginItems:  defaultPluginItems(),
+		steamRunning: plugins.SteamRunning,
 	}
 }
 
@@ -336,9 +352,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.compatResult = &msg.result
 		m.compatRolledBack = msg.rolledBack
+		m.compatPending = compatdataActionNone
 		m.screen = screenCompatdataResult
 		m.refreshViewport()
 		return m, nil
+	case compatdataSteamClosedMsg:
+		m.err = msg.err
+		if msg.err != nil {
+			m.checking = false
+			m.mutating = false
+			m.activity = ""
+			m.refreshViewport()
+			return m, nil
+		}
+		m.checking = true
+		m.mutating = true
+		if m.compatPending == compatdataActionRestore {
+			m.activity = textActivityRollbackCompatdata
+		} else {
+			m.activity = textActivityConfigureCompatdata
+		}
+		return m, tea.Batch(m.spinner.Tick, runCompatdataOperation(m.selectedPlan, m.compatPending))
 	case tea.KeyMsg:
 		key := msg.String()
 		if key == "ctrl+c" || key == "q" {
@@ -529,22 +563,56 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.screen = screenCompatdata
 				m.refreshViewport()
 				return m, nil
-			case "m":
+			case "c":
 				if m.err == nil && m.selectedPlan.Library.Path != "" && m.selectedPlan.BlockedReason == "" &&
 					(m.selectedPlan.CurrentState == plugins.CompatdataDirectory || m.selectedPlan.CurrentState == plugins.CompatdataMissing ||
 						m.selectedPlan.CurrentState == plugins.CompatdataExternalLink || m.selectedPlan.CurrentState == plugins.CompatdataBrokenLink) {
+					m.compatPending = compatdataActionConfigure
+					if m.isSteamRunning() {
+						m.err = nil
+						m.screen = screenCompatdataSteamConfirm
+						m.refreshViewport()
+						return m, nil
+					}
 					m.checking = true
 					m.mutating = true
-					m.activity = textActivityMigrateCompatdata
-					return m, tea.Batch(m.spinner.Tick, applyCompatdataMigration(m.selectedPlan))
+					m.activity = textActivityConfigureCompatdata
+					return m, tea.Batch(m.spinner.Tick, runCompatdataOperation(m.selectedPlan, m.compatPending))
 				}
 			case "r":
 				if m.err == nil && m.selectedPlan.Library.Path != "" && m.selectedPlan.BlockedReason == "" &&
 					m.selectedPlan.CurrentState == plugins.CompatdataManagedLink && m.selectedPlan.RollbackAvailable {
+					m.compatPending = compatdataActionRestore
+					if m.isSteamRunning() {
+						m.err = nil
+						m.screen = screenCompatdataSteamConfirm
+						m.refreshViewport()
+						return m, nil
+					}
 					m.checking = true
 					m.mutating = true
 					m.activity = textActivityRollbackCompatdata
-					return m, tea.Batch(m.spinner.Tick, rollbackCompatdataMigration(m.selectedPlan.Library))
+					return m, tea.Batch(m.spinner.Tick, runCompatdataOperation(m.selectedPlan, m.compatPending))
+				}
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		case screenCompatdataSteamConfirm:
+			switch key {
+			case "esc", "backspace":
+				m.err = nil
+				m.compatPending = compatdataActionNone
+				m.screen = screenCompatdataPlan
+				m.refreshViewport()
+				return m, nil
+			case "c":
+				if m.compatPending != compatdataActionNone && m.selectedPlan.Library.Path != "" {
+					m.err = nil
+					m.checking = true
+					m.mutating = true
+					m.activity = textActivityCloseSteam
+					return m, tea.Batch(m.spinner.Tick, closeSteamForCompatdata(m.ctx))
 				}
 			}
 			var cmd tea.Cmd
@@ -687,7 +755,7 @@ func (m model) View() string {
 		case screenInstallConfirm, screenInstallResult, screenRollbackConfirm, screenRollbackResult,
 			screenUninstallConfirm, screenUninstallResult, screenPlatformAssetOverride,
 			screenPlatformAssetOverrideDetails, screenPlatformAssetOverrideFixConfirm,
-			screenPlatformAssetOverrideFixResult, screenCompatdata, screenCompatdataPlan, screenCompatdataResult:
+			screenPlatformAssetOverrideFixResult, screenCompatdata, screenCompatdataPlan, screenCompatdataSteamConfirm, screenCompatdataResult:
 			body = m.viewport.View()
 		case screenPlugins:
 			body = m.pluginsView()
@@ -726,12 +794,15 @@ func (m model) View() string {
 	} else if m.screen == screenCompatdataPlan && !m.checking {
 		footerText = textFooterCompatdataPlan
 		if m.selectedPlan.BlockedReason == "" &&
-			(m.selectedPlan.CurrentState == plugins.CompatdataDirectory || m.selectedPlan.CurrentState == plugins.CompatdataMissing) {
-			footerText = textFooterCompatdataPlanMigrate
+			(m.selectedPlan.CurrentState == plugins.CompatdataDirectory || m.selectedPlan.CurrentState == plugins.CompatdataMissing ||
+				m.selectedPlan.CurrentState == plugins.CompatdataExternalLink || m.selectedPlan.CurrentState == plugins.CompatdataBrokenLink) {
+			footerText = textFooterCompatdataPlanConfigure
 		} else if m.selectedPlan.BlockedReason == "" &&
 			m.selectedPlan.CurrentState == plugins.CompatdataManagedLink && m.selectedPlan.RollbackAvailable {
 			footerText = textFooterCompatdataPlanRollback
 		}
+	} else if m.screen == screenCompatdataSteamConfirm && !m.checking {
+		footerText = textFooterCompatdataSteamConfirm
 	} else if m.screen == screenCompatdataResult && !m.checking {
 		footerText = textFooterResult
 	} else if (m.screen == screenInstallResult || m.screen == screenRollbackResult || m.screen == screenUninstallResult) && !m.checking {
@@ -869,6 +940,8 @@ func (m *model) refreshViewport() {
 		content = m.compatdataContent()
 	case screenCompatdataPlan:
 		content = m.compatdataPlanContent()
+	case screenCompatdataSteamConfirm:
+		content = m.compatdataSteamConfirmContent()
 	case screenCompatdataResult:
 		content = m.compatdataResultContent()
 	default:
@@ -1112,6 +1185,9 @@ func (m model) compatdataPlanContent() string {
 		b.WriteString(textCompatdataImportSourceLabel + plan.ImportSource + "\n")
 	}
 	b.WriteString(textCompatdataTargetLabel + plan.NativeTarget + "\n")
+	if plan.PreservedNativeTarget != "" {
+		b.WriteString(textCompatdataPreservedLabel + plan.PreservedNativeTarget + "\n")
+	}
 	if plan.RequiresBackup || (plan.RollbackAvailable && plan.BackupPath != "") {
 		b.WriteString(textCompatdataBackupLabel + plan.BackupPath + "\n")
 	}
@@ -1119,7 +1195,7 @@ func (m model) compatdataPlanContent() string {
 	if plan.BlockedReason != "" {
 		b.WriteString(errorStyle().Render(textCompatdataBlockedLabel + plan.BlockedReason))
 		b.WriteString("\n\n")
-		b.WriteString(mutedStyle.Render(textCompatdataNoMigrate))
+		b.WriteString(mutedStyle.Render(textCompatdataCannotConfigure))
 		return strings.TrimRight(b.String(), "\n")
 	}
 	if plan.CurrentState == plugins.CompatdataManagedLink {
@@ -1133,7 +1209,9 @@ func (m model) compatdataPlanContent() string {
 		}
 		return strings.TrimRight(b.String(), "\n")
 	}
-	if plan.DetachesExistingLink && plan.RequiresCopy {
+	if plan.PreservedNativeTarget != "" {
+		b.WriteString(mutedStyle.Render(textCompatdataWillRecoverRollback))
+	} else if plan.DetachesExistingLink && plan.RequiresCopy {
 		b.WriteString(mutedStyle.Render(textCompatdataWillImportLink))
 	} else if plan.DetachesExistingLink {
 		b.WriteString(mutedStyle.Render(textCompatdataWillReplaceBroken))
@@ -1143,23 +1221,55 @@ func (m model) compatdataPlanContent() string {
 		b.WriteString(mutedStyle.Render(textCompatdataWillLink))
 	}
 	b.WriteString("\n\n")
-	if plan.DetachesExistingLink {
+	if plan.PreservedNativeTarget != "" {
+		b.WriteString(textCompatdataRecoverySafety + "\n\n")
+	} else if plan.DetachesExistingLink {
 		b.WriteString(textCompatdataManualLinkSafety + "\n\n")
 	} else {
 		b.WriteString(textCompatdataSafety + "\n\n")
 	}
 	if plan.CurrentState == plugins.CompatdataDirectory || plan.CurrentState == plugins.CompatdataMissing ||
 		plan.CurrentState == plugins.CompatdataExternalLink || plan.CurrentState == plugins.CompatdataBrokenLink {
-		action := textCompatdataMigrateAction
+		action := textCompatdataConfigureAction
 		if plan.DetachesExistingLink {
 			action = textCompatdataReplaceLinkAction
 		}
 		b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(action))
 		b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
 	} else {
-		b.WriteString(mutedStyle.Render(textCompatdataNoMigrate))
+		b.WriteString(mutedStyle.Render(textCompatdataCannotConfigure))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) compatdataSteamConfirmContent() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textCompatdataSteamConfirmTitle))
+	b.WriteString("\n\n")
+	b.WriteString(textCompatdataSteamDetected)
+	b.WriteString("\n\n")
+	if m.compatPending == compatdataActionRestore {
+		b.WriteString(textCompatdataSteamRestoreReason)
+	} else {
+		b.WriteString(textCompatdataSteamConfigureReason)
+	}
+	b.WriteString("\n\n")
+	b.WriteString(textCompatdataSteamCloseBehavior)
+	if m.err != nil {
+		b.WriteString("\n\n")
+		b.WriteString(errorStyle().Render("× " + m.err.Error()))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render(textCompatdataSteamCloseAction))
+	b.WriteString("  " + mutedStyle.Render(textEscapeNoChanges))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) isSteamRunning() bool {
+	if m.steamRunning == nil {
+		return plugins.SteamRunning()
+	}
+	return m.steamRunning()
 }
 
 func (m model) compatdataResultContent() string {
@@ -1177,19 +1287,24 @@ func (m model) compatdataResultContent() string {
 	if m.compatRolledBack {
 		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textCompatdataRolledBack))
 	} else if m.compatResult.TransactionID == "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textCompatdataAlreadyMigrated))
+		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textCompatdataAlreadyConfigured))
 	} else {
-		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textCompatdataMigrated))
+		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textCompatdataConfigured))
 	}
 	b.WriteString("\n")
 	b.WriteString(textCompatdataSourceLabel + plan.Compatdata + "\n")
 	b.WriteString(textCompatdataTargetLabel + plan.NativeTarget + "\n")
+	if plan.PreservedNativeTarget != "" {
+		b.WriteString(textCompatdataPreservedLabel + plan.PreservedNativeTarget + "\n")
+	}
 	if m.compatResult.TransactionID != "" {
 		b.WriteString(textTransactionLabel + m.compatResult.TransactionID + "\n")
 	}
 	b.WriteString("\n")
 	if m.compatRolledBack {
 		b.WriteString(mutedStyle.Render(textCompatdataRollbackResultHint))
+	} else if plan.PreservedNativeTarget != "" {
+		b.WriteString(mutedStyle.Render(textCompatdataRecoveryResultHint))
 	} else if plan.DetachesExistingLink {
 		b.WriteString(mutedStyle.Render(textCompatdataManualResultHint))
 	} else {
@@ -1570,25 +1685,24 @@ func scanCompatdata() tea.Cmd {
 	}
 }
 
-func applyCompatdataMigration(plan plugins.CompatdataPlan) tea.Cmd {
+func runCompatdataOperation(plan plugins.CompatdataPlan, action compatdataPendingAction) tea.Cmd {
 	return func() tea.Msg {
 		env, err := planner.DetectEnvironment()
 		if err != nil {
 			return compatdataApplyMsg{err: err}
+		}
+		if action == compatdataActionRestore {
+			result, err := plugins.RollbackLatestCompatdataMigration(env, plan.Library)
+			return compatdataApplyMsg{result: result, rolledBack: true, err: err}
 		}
 		result, err := plugins.ApplyCompatdataMigration(env, plan)
 		return compatdataApplyMsg{result: result, err: err}
 	}
 }
 
-func rollbackCompatdataMigration(library plugins.SteamLibrary) tea.Cmd {
+func closeSteamForCompatdata(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		env, err := planner.DetectEnvironment()
-		if err != nil {
-			return compatdataApplyMsg{err: err}
-		}
-		result, err := plugins.RollbackLatestCompatdataMigration(env, library)
-		return compatdataApplyMsg{result: result, rolledBack: true, err: err}
+		return compatdataSteamClosedMsg{err: plugins.CloseSteam(ctx)}
 	}
 }
 

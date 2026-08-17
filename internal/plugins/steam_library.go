@@ -144,10 +144,14 @@ func discoverSteamLibraries(env planner.Environment, mounts []mount) []SteamLibr
 			return
 		}
 		mount, ok := findMountFor(mounts, physical)
-		if !ok || !isNTFS(mount.filesystem) || seen[physical] {
+		if !ok || !isNTFS(mount.filesystem) {
 			return
 		}
-		seen[physical] = true
+		identity := libraryIdentityKey(mount, physical)
+		if seen[identity] {
+			return
+		}
+		seen[identity] = true
 		libraries = append(libraries, SteamLibrary{
 			Path:       physical,
 			MountPoint: mount.point,
@@ -176,6 +180,22 @@ func discoverSteamLibraries(env planner.Environment, mounts []mount) []SteamLibr
 	}
 	sort.Slice(libraries, func(i, j int) bool { return libraries[i].Path < libraries[j].Path })
 	return libraries
+}
+
+// libraryIdentityKey identifies one library inside a mounted filesystem.
+// NTFS is case-insensitive in the configurations supported by Selene, while
+// still preserving whichever spelling came from Steam or readdir. Using the
+// display path as the key would therefore list SteamLibrary and steamlibrary
+// as two libraries even though both names address the same directory.
+func libraryIdentityKey(mount mount, path string) string {
+	relative, err := filepath.Rel(filepath.Clean(mount.point), filepath.Clean(path))
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	if isNTFS(mount.filesystem) {
+		relative = strings.ToLower(relative)
+	}
+	return filepath.Join(filepath.Clean(mount.point), relative)
 }
 
 func findSteamLibraryRoots(mountPoint string) []string {

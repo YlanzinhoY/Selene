@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -92,6 +93,7 @@ func TestApplyAndRollbackCompatdataMigration(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the migration only mutates files on Linux")
 	}
+	stubSteamClosed(t)
 	root := t.TempDir()
 	env := pluginEnvironment(root)
 
@@ -136,12 +138,99 @@ func TestApplyAndRollbackCompatdataMigration(t *testing.T) {
 	}
 
 	// Rollback restores the original directory.
-	if _, err := RollbackCompatdataMigration(env, result.TransactionID); err != nil {
+	rollback, err := RollbackCompatdataMigration(env, result.TransactionID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	info, err = os.Lstat(compatdata)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		t.Fatalf("compatdata not restored to directory: info=%v err=%v", info, err)
+	}
+	if rollback.Plan.PreservedNativeTarget == "" {
+		t.Fatal("rollback did not report the automatically preserved native target")
+	}
+	if _, err := os.Lstat(plan.NativeTarget); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stable native target should be free after rollback: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(rollback.Plan.PreservedNativeTarget, "578080", "pfx", "tracked_files")); err != nil {
+		t.Fatalf("preserved native target missing copied file: %v", err)
+	}
+}
+
+func stubSteamClosed(t *testing.T) {
+	t.Helper()
+	previous := steamRunningCheck
+	steamRunningCheck = func() bool { return false }
+	t.Cleanup(func() { steamRunningCheck = previous })
+}
+
+func TestAvailablePreservedNativeTargetAvoidsExistingArchives(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "native")
+	first := target + nativeRollbackMarker + "transaction"
+	if err := os.MkdirAll(first, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := availablePreservedNativeTarget(target, "transaction"); got != first+"-1" {
+		t.Fatalf("preserved target = %q, want %q", got, first+"-1")
+	}
+}
+
+func TestMoveNativeTargetUsesSameDirectoryAndRefusesOverwrite(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "native")
+	destination := filepath.Join(root, "native.rollback")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "prefix"), []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := moveNativeTarget(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(destination, "prefix")); err != nil || string(data) != "data" {
+		t.Fatalf("preserved data = %q, %v", data, err)
+	}
+	if _, err := os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source still exists after atomic preservation: %v", err)
+	}
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := moveNativeTarget(source, destination); err == nil {
+		t.Fatal("expected an existing preservation path to be refused")
+	}
+	if err := moveNativeTarget(source, filepath.Join(root, "other", "archive")); err == nil {
+		t.Fatal("expected a cross-directory preservation path to be refused")
+	}
+}
+
+func TestRestorePreservedNativeTargetReplacesIncompleteRetry(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "native")
+	preserved := filepath.Join(root, "native.rollback")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "partial"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(preserved, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(preserved, "original"), []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := CompatdataPlan{NativeTarget: target, PreservedNativeTarget: preserved}
+	if err := restorePreservedNativeTarget(plan); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(target, "original")); err != nil || string(data) != "original" {
+		t.Fatalf("restored native data = %q, %v", data, err)
+	}
+	if _, err := os.Lstat(filepath.Join(target, "partial")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("incomplete retry data was not removed: %v", err)
 	}
 }
 
@@ -153,5 +242,40 @@ func TestPlanRefusesNonLibrary(t *testing.T) {
 	library := SteamLibrary{Path: filepath.Join(t.TempDir(), "not-a-library"), MountPoint: t.TempDir(), Filesystem: "ntfs3"}
 	if _, err := PlanCompatdataMigration(env, library); err == nil {
 		t.Fatal("expected non-library to be refused")
+	}
+}
+
+func TestPlanStillBlocksUnrecognizedNativeData(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the migration only runs on Linux")
+	}
+	root := t.TempDir()
+	env := pluginEnvironment(root)
+	library := SteamLibrary{
+		Path:       filepath.Join(root, "mounted", "SteamLibrary"),
+		MountPoint: filepath.Join(root, "mounted"),
+		Filesystem: "ntfs3",
+	}
+	if err := os.MkdirAll(filepath.Join(library.Path, "steamapps", "compatdata", "620"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := nativeTargetPath(env, library)
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "unknown-prefix"), []byte("do not touch"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanCompatdataMigration(env, library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.BlockedReason != nativeTargetHasData || plan.PreservedNativeTarget != "" {
+		t.Fatalf("unrecognized native data plan = %#v", plan)
+	}
+	data, err := os.ReadFile(filepath.Join(target, "unknown-prefix"))
+	if err != nil || string(data) != "do not touch" {
+		t.Fatalf("unrecognized native data changed: %q, %v", data, err)
 	}
 }
