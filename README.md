@@ -15,7 +15,7 @@ Created by [YlanzinhoY](https://github.com/YlanzinhoY) as an independent communi
 - Persistent snapshots and automatic recovery on failure.
 - Rollback that restores the previous state and restarts Steam.
 - Complete LuaTools removal without deleting Steam or games.
-- Community plugins, starting with a safe alias for an existing Steam library on a mounted NTFS disk.
+- Community plugins for safer Steam and Proton integration on supported Linux systems.
 
 ## Goals
 
@@ -29,7 +29,7 @@ Created by [YlanzinhoY](https://github.com/YlanzinhoY) as an independent communi
 
 ## Compatibility
 
-Selene v0.0.2 currently requires:
+Selene v0.0.3 currently requires:
 
 - Linux `x86_64/amd64`.
 - Native Steam opened at least once.
@@ -83,7 +83,20 @@ A good first run is:
 
 Use **Undo last installation** to restore the exact previous snapshot. Use **Remove LuaTools completely** when you want to remove the full LuaTools, Lumen, and slsteam-moon user integration. Neither action deletes games.
 
-**Selene Plugins** includes **Shared Steam library (NTFS)**. It finds an existing Steam library on an already-mounted Windows game disk and, after confirmation, creates a user-only symbolic link. It never mounts disks, changes games, or edits Steam's settings; add the created link in Steam's **Settings → Storage** when needed.
+## Plugins
+
+Open **Plugins NEW** from the home screen to access optional, user-scoped integrations.
+
+### NTFS Proton compatdata link
+
+This plugin is intended for Windows/Linux dual-boot users who keep Steam games on a dedicated NTFS partition. Games remain shared on NTFS while Selene places Proton compatibility data on native Linux storage. It can also detect filename handling that may cause missing assets or broken graphics and offer a temporary correction for the current session.
+
+Selene shows the complete plan and asks to close Steam before making changes. It does not delete games or require `sudo`.
+
+> [!IMPORTANT]
+> Do not use the Windows system partition, usually `C:`. Prefer a separate partition dedicated to games. If the library is used only on Linux, use Btrfs or Ext4 instead.
+>
+> After rollback, Proton games from that NTFS library will not launch on Linux until the plugin is configured again.
 
 ## Safety
 
