@@ -15,6 +15,7 @@ Created by [YlanzinhoY](https://github.com/YlanzinhoY) as an independent communi
 - Persistent snapshots and automatic recovery on failure.
 - Rollback that restores the previous state and restarts Steam.
 - Complete LuaTools removal without deleting Steam or games.
+- A supervised local achievement backend that starts before Steam and recovers after a crash.
 - Community plugins for safer Steam and Proton integration on supported Linux systems.
 
 ## Goals
@@ -82,6 +83,8 @@ A good first run is:
 4. Open Steam after installation succeeds.
 
 Use **Undo last installation** to restore the exact previous snapshot. Use **Remove LuaTools completely** when you want to remove the full LuaTools, Lumen, and slsteam-moon user integration. Neither action deletes games.
+
+After the stack is installed, use **Start Steam with achievements NEW** instead of opening Steam directly. Selene starts the local backend, waits for its health check, opens Steam through the SLSsteam wrapper, and keeps supervising the backend. Close Steam normally to end the session; Selene then requests a graceful backend shutdown. If the backend is temporarily unavailable, Steam still opens and Selene keeps trying to recover it.
 
 ## Plugins
 

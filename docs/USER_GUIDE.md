@@ -63,6 +63,7 @@ The home screen contains:
 - **Undo last installation:** restores the exact previous snapshot and restarts Steam.
 - **Remove LuaTools completely:** removes LuaTools, Lumen, slsteam-moon, settings, services, and user-level Steam integration.
 - **Selene Plugins:** contains optional, user-scoped community integrations.
+- **Start Steam with achievements:** starts the local backend, waits for readiness, opens Steam through SLSsteam, and supervises the backend until Steam closes.
 - **About Selene:** shows the mission, current state, and creator credit.
 
 Recommended first run:
@@ -75,6 +76,18 @@ Recommended first run:
 6. Open Steam after installation succeeds.
 
 Selene intentionally exposes no operational CLI commands. The internal `--version` flag exists only for release diagnostics and bootstrap validation.
+
+### Supervised achievement session
+
+Close any existing Steam client, then select **Start Steam with achievements**. Selene performs these steps in order:
+
+1. starts its private achievement backend;
+2. waits for the loopback health endpoint;
+3. opens `~/.local/share/SLSsteam/path/steam -silent`;
+4. watches Steam and restarts the backend if it exits;
+5. sends `SIGTERM` to the backend after Steam closes, using a forced stop only if the shutdown timeout expires.
+
+Keep Selene open for the session and close Steam normally when finished. Backend failure does not block Steam startup: the result screen reports degraded operation while Selene retries recovery. This action requires the installed SLSsteam wrapper and refuses to attach to a Steam client that was already running.
 
 ### Shared Steam library (NTFS)
 
@@ -107,6 +120,9 @@ After successful complete removal, an older rollback cannot cross that boundary 
 | slsteam-moon | `~/.local/share/SLSsteam` |
 | Lumen and LuaTools | `~/.local/share/Lumen` |
 | SLSsteam settings | `~/.config/SLSsteam` |
+| Achievement settings | `~/.config/selene/achievements` |
+| Achievement cache and media | `~/.local/share/selene/achievements` |
+| Achievement log | `~/.local/state/selene/achievements/logs/achievements.log` |
 
 XDG variables are respected for cache, configuration, state, desktop entries, and services. SLSsteam and Lumen remain in `~/.local/share` because the upstream wrapper resolves those paths directly.
 

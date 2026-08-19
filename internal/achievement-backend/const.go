@@ -1,0 +1,59 @@
+package backend
+
+import (
+	"os"
+	"path/filepath"
+	"time"
+)
+
+const AppName = "selene-achievements"
+
+var Version = "0.0.0"
+
+var EmuDir = filepath.Join("users", "steamuser", "AppData", "Roaming", "GSE Saves")
+var GoldbergSteamEmuDir = filepath.Join("users", "steamuser", "AppData", "Roaming", "Goldberg SteamEmu Saves")
+var CodexEmuDir = filepath.Join("users", "Public", "Documents", "Steam", "CODEX")
+var RuneEmuDir = filepath.Join("users", "Public", "Documents", "Steam", "RUNE")
+
+var UserCacheDir, _ = os.UserCacheDir()
+var UserConfigDir, _ = os.UserConfigDir()
+
+func getUserDataDir() string {
+	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
+		return dir
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share")
+}
+
+func getUserStateDir() string {
+	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
+		return dir
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state")
+}
+
+// Config directory (XDG_CONFIG_HOME)
+var ConfigDir = filepath.Join(UserConfigDir, "selene", "achievements")
+var ConfigPath = filepath.Join(ConfigDir, "config.json")
+
+// Data directory (XDG_DATA_HOME)
+var DataDir = filepath.Join(getUserDataDir(), "selene", "achievements")
+var MediaDir = filepath.Join(DataDir, "media")
+var ACHCacheDataDir = filepath.Join(DataDir, "data")
+var ACHCacheIconDir = filepath.Join(DataDir, "icon")
+var GameCacheDir = filepath.Join(DataDir, "games")
+
+// State directory (XDG_STATE_HOME)
+var StateDir = filepath.Join(getUserStateDir(), "selene", "achievements")
+var LogDir = filepath.Join(StateDir, "logs")
+var LogFilePath = filepath.Join(LogDir, "achievements.log")
+
+var WalkerInterval = 5 * time.Second
+
+// Notification timing
+var NotificationExpireTime = 7 * time.Second
+var NotificationDelay = NotificationExpireTime + 1*time.Second
+var ProgressNotificationExpireTime = time.Duration(float64(NotificationExpireTime) * 0.7)
+var ProgressNotificationDelay = time.Duration(float64(NotificationDelay) * 0.7)

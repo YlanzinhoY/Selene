@@ -26,6 +26,7 @@ const (
 	textActivityRollbackCompatdata        = "Restoring the original NTFS compatdata backup..."
 	textActivityCloseSteam                = "Closing Steam safely before the selected operation..."
 	textActivityRepairNTFSMount           = "Remounting NTFS with case-preserving filenames for this session..."
+	textActivityAchievementSession        = "Starting achievements, opening Steam through SLSsteam, and supervising the session..."
 
 	textFooterHome                            = "↑/↓ navigate  •  enter select  •  esc back  •  q quit"
 	textFooterDoctor                          = "↑/↓ scroll  •  r check again  •  esc back  •  q quit"
@@ -49,6 +50,7 @@ const (
 	textFooterCompatdataNTFSResult            = "↑/↓ scroll  •  m manual steps  •  esc back"
 	textFooterResult                          = "↑/↓ scroll  •  esc back  •  q quit"
 	textFooterTransaction                     = "Transaction in progress • wait for commit or automatic rollback"
+	textFooterAchievementSession              = "Steam session active • close Steam to finish and stop the achievement backend"
 
 	textNoDiagnostics       = "No diagnostic has been run yet."
 	textDoctorTitle         = "Environment check"
@@ -234,6 +236,15 @@ const (
 	textNTFSResultOpenSteam      = "Open Steam through the SLSsteam/LuaTools launcher, then test the affected game."
 	textNTFSResultRecoveredMount = "Selene attempted to restore the operating system's default mount after the repair failed. Review the error before trying the manual steps."
 
+	textAchievementResultTitle     = "Achievement session result"
+	textAchievementSessionComplete = "✓ Supervised Steam session completed"
+	textAchievementSteamClosed     = "Steam closed and Selene stopped the achievement backend."
+	textAchievementBackendReady    = "✓ The achievement backend became ready before or during the session."
+	textAchievementRestartFormat   = "Backend recoveries: %d"
+	textAchievementDegraded        = "! Steam continued in degraded mode while the achievement backend was unavailable."
+	textAchievementLastError       = "Last backend error: "
+	textAchievementForcedStop      = "! The backend exceeded the graceful shutdown timeout and was force-stopped."
+
 	textAboutTitle  = "About Selene"
 	textAboutBody   = "Selene is an independent community manager that makes the\nLuaTools ecosystem accessible on Linux. Its priority is to install,\ncheck, update, undo, and remove changes safely."
 	textAboutState  = "Current state: transactional user-only install, rollback, and complete removal."
@@ -248,6 +259,7 @@ var textHomeMenu = []menuItem{
 	{title: "Undo last installation", description: "Restore the exact previous state and restart Steam"},
 	{title: "Remove LuaTools completely", description: "Remove LuaTools, Lumen, and slsteam-moon from your user account"},
 	{title: "Plugins", badge: "NEW", description: "Explore optional community tools that remain safe and user-scoped"},
+	{title: "Start Steam with achievements", badge: "NEW", description: "Run the local achievement backend for one supervised Steam session"},
 	{title: "About Selene", description: "Learn about the project's mission and current status"},
 	{title: "Exit", description: "Close the interface"},
 }

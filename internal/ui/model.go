@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/selene-linux/selene/internal/achievementsupervisor"
 	"github.com/selene-linux/selene/internal/artifact"
 	"github.com/selene-linux/selene/internal/catalog"
 	"github.com/selene-linux/selene/internal/doctor"
@@ -45,6 +47,7 @@ const (
 	screenCompatdataNTFSManual
 	screenCompatdataNTFSResult
 	screenCompatdataResult
+	screenAchievementSessionResult
 	screenAbout
 )
 
@@ -131,6 +134,12 @@ type compatdataNTFSRepairMsg struct {
 	err    error
 }
 
+type achievementSessionMsg struct {
+	result achievementsupervisor.Result
+	log    string
+	err    error
+}
+
 type compatdataPendingAction int
 
 const (
@@ -148,43 +157,45 @@ type menuItem struct {
 }
 
 type model struct {
-	width            int
-	height           int
-	cursor           int
-	pluginCursor     int
-	gameCursor       int
-	screen           screen
-	ctx              context.Context
-	cancel           context.CancelFunc
-	checking         bool
-	mutating         bool
-	activity         string
-	spinner          spinner.Model
-	viewport         viewport.Model
-	report           *doctor.Report
-	plan             *planner.Plan
-	fetched          []artifact.Result
-	installed        *installer.Result
-	rolledBack       *installer.RollbackResult
-	removal          *installer.UninstallPreview
-	uninstalled      *installer.UninstallResult
-	history          []transaction.Journal
-	log              string
-	err              error
-	items            []menuItem
-	pluginItems      []menuItem
-	steamGames       []plugins.SteamGame
-	selectedGame     plugins.SteamGame
-	gameAnalysis     *plugins.AssetOverrideAnalysis
-	gameFix          *plugins.PlatformAssetOverrideFix
-	compatPlans      []plugins.CompatdataPlan
-	compatCursor     int
-	selectedPlan     plugins.CompatdataPlan
-	compatResult     *plugins.CompatdataResult
-	compatRolledBack bool
-	compatPending    compatdataPendingAction
-	compatNTFSResult *plugins.NTFSSessionRepairResult
-	steamRunning     func() bool
+	width             int
+	height            int
+	cursor            int
+	pluginCursor      int
+	gameCursor        int
+	screen            screen
+	ctx               context.Context
+	cancel            context.CancelFunc
+	checking          bool
+	mutating          bool
+	activity          string
+	spinner           spinner.Model
+	viewport          viewport.Model
+	report            *doctor.Report
+	plan              *planner.Plan
+	fetched           []artifact.Result
+	installed         *installer.Result
+	rolledBack        *installer.RollbackResult
+	removal           *installer.UninstallPreview
+	uninstalled       *installer.UninstallResult
+	history           []transaction.Journal
+	log               string
+	err               error
+	items             []menuItem
+	pluginItems       []menuItem
+	steamGames        []plugins.SteamGame
+	selectedGame      plugins.SteamGame
+	gameAnalysis      *plugins.AssetOverrideAnalysis
+	gameFix           *plugins.PlatformAssetOverrideFix
+	compatPlans       []plugins.CompatdataPlan
+	compatCursor      int
+	selectedPlan      plugins.CompatdataPlan
+	compatResult      *plugins.CompatdataResult
+	compatRolledBack  bool
+	compatPending     compatdataPendingAction
+	compatNTFSResult  *plugins.NTFSSessionRepairResult
+	steamRunning      func() bool
+	achievementResult *achievementsupervisor.Result
+	achievementActive bool
 }
 
 var (
@@ -405,6 +416,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenCompatdataNTFSResult
 		m.refreshViewport()
 		return m, nil
+	case achievementSessionMsg:
+		m.checking = false
+		m.mutating = false
+		m.achievementActive = false
+		m.activity = ""
+		m.err = msg.err
+		m.achievementResult = &msg.result
+		m.log = msg.log
+		m.screen = screenAchievementSessionResult
+		m.refreshViewport()
+		return m, nil
 	case tea.KeyMsg:
 		key := msg.String()
 		if key == "ctrl+c" || key == "q" {
@@ -458,8 +480,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 6:
 					m.screen = screenPlugins
 				case 7:
-					m.screen = screenAbout
+					m.checking = true
+					m.mutating = true
+					m.achievementActive = true
+					m.activity = textActivityAchievementSession
+					return m, tea.Batch(m.spinner.Tick, runAchievementSession(m.ctx))
 				case 8:
+					m.screen = screenAbout
+				case 9:
 					return m, tea.Quit
 				}
 			}
@@ -794,7 +822,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
-		case screenInstallResult, screenRollbackResult, screenUninstallResult:
+		case screenInstallResult, screenRollbackResult, screenUninstallResult, screenAchievementSessionResult:
 			if key == "esc" || key == "backspace" {
 				m.screen = screenHome
 				return m, nil
@@ -838,7 +866,7 @@ func (m model) View() string {
 			screenPlatformAssetOverrideDetails, screenPlatformAssetOverrideFixConfirm,
 			screenPlatformAssetOverrideFixResult, screenCompatdata, screenCompatdataPlan,
 			screenCompatdataSteamConfirm, screenCompatdataNTFSManual, screenCompatdataNTFSResult,
-			screenCompatdataResult:
+			screenCompatdataResult, screenAchievementSessionResult:
 			body = m.viewport.View()
 		case screenPlugins:
 			body = m.pluginsView()
@@ -894,8 +922,12 @@ func (m model) View() string {
 		footerText = textFooterCompatdataNTFSResult
 	} else if m.screen == screenCompatdataResult && !m.checking {
 		footerText = textFooterResult
+	} else if m.screen == screenAchievementSessionResult && !m.checking {
+		footerText = textFooterResult
 	} else if (m.screen == screenInstallResult || m.screen == screenRollbackResult || m.screen == screenUninstallResult) && !m.checking {
 		footerText = textFooterResult
+	} else if m.achievementActive {
+		footerText = textFooterAchievementSession
 	} else if m.mutating {
 		footerText = textFooterTransaction
 	}
@@ -1041,6 +1073,8 @@ func (m *model) refreshViewport() {
 		content = m.compatdataNTFSResultContent()
 	case screenCompatdataResult:
 		content = m.compatdataResultContent()
+	case screenAchievementSessionResult:
+		content = m.achievementSessionResultContent()
 	default:
 		return
 	}
@@ -1674,6 +1708,50 @@ func (m model) uninstallResultContent() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func (m model) achievementSessionResultContent() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(textAchievementResultTitle))
+	b.WriteString("\n\n")
+	if m.err != nil {
+		b.WriteString(errorStyle().Render("× " + m.err.Error()))
+		b.WriteString("\n\n")
+	} else if m.achievementResult != nil && m.achievementResult.SteamStarted {
+		b.WriteString(lipgloss.NewStyle().Foreground(goodColor).Bold(true).Render(textAchievementSessionComplete))
+		b.WriteString("\n")
+		b.WriteString(textAchievementSteamClosed)
+		b.WriteString("\n\n")
+	}
+	if result := m.achievementResult; result != nil {
+		if result.BackendBecameReady {
+			b.WriteString(textAchievementBackendReady)
+			b.WriteString("\n")
+		}
+		if result.BackendRestarts > 0 {
+			b.WriteString(fmt.Sprintf(textAchievementRestartFormat, result.BackendRestarts))
+			b.WriteString("\n")
+		}
+		if result.Degraded {
+			b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render(textAchievementDegraded))
+			b.WriteString("\n")
+			if result.LastBackendError != "" {
+				b.WriteString(mutedStyle.Render(textAchievementLastError + result.LastBackendError))
+				b.WriteString("\n")
+			}
+		}
+		if result.ForcedBackendStop {
+			b.WriteString(lipgloss.NewStyle().Foreground(warnColor).Render(textAchievementForcedStop))
+			b.WriteString("\n")
+		}
+	}
+	if strings.TrimSpace(m.log) != "" {
+		b.WriteString("\n")
+		b.WriteString(mutedStyle.Render(textOperationLog))
+		b.WriteString("\n")
+		b.WriteString(m.log)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func latestRestorable(history []transaction.Journal) *transaction.Journal {
 	for index := range history {
 		journal := &history[index]
@@ -1727,6 +1805,51 @@ func compactHash(value string) string {
 
 func aboutView() string {
 	return titleStyle.Render(textAboutTitle) + "\n\n" + textAboutBody + "\n\n" + mutedStyle.Render(textAboutState) + "\n\n" + titleStyle.Render(textAboutAuthor)
+}
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+const maximumAchievementSessionLog = 64 * 1024
+
+func (b *synchronizedBuffer) Write(value []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	written := len(value)
+	if len(value) >= maximumAchievementSessionLog {
+		b.buffer.Reset()
+		_, _ = b.buffer.Write(value[len(value)-maximumAchievementSessionLog:])
+		return written, nil
+	}
+	if overflow := b.buffer.Len() + len(value) - maximumAchievementSessionLog; overflow > 0 {
+		b.buffer.Next(overflow)
+	}
+	_, _ = b.buffer.Write(value)
+	return written, nil
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+func runAchievementSession(ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		env, err := planner.DetectEnvironment()
+		if err != nil {
+			return achievementSessionMsg{err: err}
+		}
+		var output synchronizedBuffer
+		supervisor, err := achievementsupervisor.NewDefault(env, &output)
+		if err != nil {
+			return achievementSessionMsg{log: output.String(), err: err}
+		}
+		result, err := supervisor.Run(ctx)
+		return achievementSessionMsg{result: result, log: output.String(), err: err}
+	}
 }
 
 func runDoctor() tea.Cmd {

@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/selene-linux/selene/internal/achievementsupervisor"
 	"github.com/selene-linux/selene/internal/installer"
 	"github.com/selene-linux/selene/internal/planner"
 	"github.com/selene-linux/selene/internal/plugins"
@@ -117,6 +118,56 @@ func TestHomeIncludesPluginsWithNewBadge(t *testing.T) {
 	}
 	if strings.Contains(content, "Selene Plugins") {
 		t.Fatalf("home menu still contains the old Selene Plugins label: %q", content)
+	}
+}
+
+func TestHomeStartsSupervisedAchievementSession(t *testing.T) {
+	m := newModel()
+	defer m.cancel()
+	m.cursor = 7
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(model)
+	if cmd == nil || !got.checking || !got.mutating || !got.achievementActive || got.activity != textActivityAchievementSession {
+		t.Fatalf("achievement transition = checking %v, mutating %v, active %v, activity %q, cmd %v", got.checking, got.mutating, got.achievementActive, got.activity, cmd)
+	}
+}
+
+func TestAchievementSessionResultShowsRecoveryAndDegradedOperation(t *testing.T) {
+	m := newModel()
+	defer m.cancel()
+	m.checking = true
+	m.mutating = true
+	m.achievementActive = true
+
+	updated, cmd := m.Update(achievementSessionMsg{result: achievementsupervisor.Result{
+		SteamStarted:       true,
+		BackendBecameReady: true,
+		Degraded:           true,
+		BackendRestarts:    2,
+		LastBackendError:   "temporary failure",
+	}})
+	got := updated.(model)
+	if cmd != nil || got.screen != screenAchievementSessionResult || got.checking || got.mutating || got.achievementActive {
+		t.Fatalf("achievement result transition = screen %v, checking %v, mutating %v, active %v", got.screen, got.checking, got.mutating, got.achievementActive)
+	}
+	content := got.achievementSessionResultContent()
+	for _, expected := range []string{"session completed", "became ready", "Backend recoveries: 2", "degraded mode", "temporary failure"} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("achievement result does not mention %q: %q", expected, content)
+		}
+	}
+}
+
+func TestAchievementSessionLogKeepsBoundedTail(t *testing.T) {
+	var buffer synchronizedBuffer
+	input := strings.Repeat("a", maximumAchievementSessionLog) + "tail"
+	if written, err := buffer.Write([]byte(input)); err != nil || written != len(input) {
+		t.Fatalf("Write() = %d, %v", written, err)
+	}
+	got := buffer.String()
+	if len(got) != maximumAchievementSessionLog || !strings.HasSuffix(got, "tail") {
+		t.Fatalf("bounded log length = %d, suffix present = %v", len(got), strings.HasSuffix(got, "tail"))
 	}
 }
 
