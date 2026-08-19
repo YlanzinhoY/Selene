@@ -10,11 +10,31 @@ func TestStableCatalogIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if catalog.Revision != "2026-08-15-v2.8" {
+	if catalog.Revision != "2026-08-18-2.8-lanzinho" {
 		t.Fatalf("Revision = %q", catalog.Revision)
 	}
 	if len(catalog.Components) != 4 {
 		t.Fatalf("Components = %d, want 4", len(catalog.Components))
+	}
+}
+
+func TestStableCatalogPinsLanzinhoLuaToolsRelease(t *testing.T) {
+	catalog, err := LoadStable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	component, ok := catalog.Component("luatools-moon")
+	if !ok {
+		t.Fatal("luatools-moon component not found")
+	}
+	if component.Version != "2.8-lanzinho" {
+		t.Fatalf("Version = %q, want 2.8-lanzinho", component.Version)
+	}
+	if component.Source.Repository != "YlanzinhoY/luatools-moon" {
+		t.Fatalf("Repository = %q, want YlanzinhoY/luatools-moon", component.Source.Repository)
+	}
+	if component.Source.Reference != "2.8-lanzinho" {
+		t.Fatalf("Reference = %q, want 2.8-lanzinho", component.Source.Reference)
 	}
 }
 

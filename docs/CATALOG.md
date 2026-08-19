@@ -12,7 +12,7 @@ Each component points directly to a known upstream source:
 
 - `swwayps/slsteam-moon`;
 - `swwayps/lumen`;
-- `swwayps/luatools-moon`;
+- `YlanzinhoY/luatools-moon` (release `2.8-lanzinho`);
 - `swwayps/cloudredirect-moon` for the optional component.
 
 The LuaTools Moon `install.sh` is useful as design reference, but Selene does not execute it and does not treat it as an integrity source.

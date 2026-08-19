@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": "2026-08-15-v2.8",
+  "revision": "2026-08-18-2.8-lanzinho",
   "channel": "stable",
   "bundles": [
     {
@@ -91,21 +91,21 @@
     {
       "id": "luatools-moon",
       "name": "LuaTools Moon",
-      "version": "v2.8",
+      "version": "2.8-lanzinho",
       "description": "LuaTools frontend and Lua backend for Lumen.",
       "dependencies": [
         "lumen"
       ],
       "source": {
         "provider": "github-release",
-        "repository": "swwayps/luatools-moon",
-        "reference": "v2.8"
+        "repository": "YlanzinhoY/luatools-moon",
+        "reference": "2.8-lanzinho"
       },
       "artifact": {
         "name": "luatools-linux.zip",
-        "url": "https://github.com/swwayps/luatools-moon/releases/download/v2.8/luatools-linux.zip",
-        "size": 2074909,
-        "sha256": "41e3bec47702642192203ac303c8934e8f0de247b6ac42387c7948d1a1d4a004",
+        "url": "https://github.com/YlanzinhoY/luatools-moon/releases/download/2.8-lanzinho/luatools-linux.zip",
+        "size": 4697676,
+        "sha256": "fe1fa9f04df4b4ab65ba820213540b89b13e42994e457b500441e83dc0014643",
         "format": "zip"
       },
       "install": {
