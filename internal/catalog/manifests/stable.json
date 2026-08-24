@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": "2026-08-15-v2.8",
+  "revision": "2026-08-24-v2.8",
   "channel": "stable",
   "bundles": [
     {
@@ -29,8 +29,8 @@
       "artifact": {
         "name": "slsteam-moon-linux-2.8-lumen.zip",
         "url": "https://github.com/swwayps/slsteam-moon/releases/download/v2.8/slsteam-moon-linux-2.8-lumen.zip",
-        "size": 4875826,
-        "sha256": "dfe151119ad2783492c743d8f6386414b02a8aaef1ceb46579f18d1b054d6f18",
+        "size": 4893278,
+        "sha256": "be36033bb5026d9c4a505f59f55cb1e7f57fd443e929e4956b68971b3e746691",
         "format": "zip"
       },
       "install": {
