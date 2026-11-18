@@ -153,6 +153,11 @@ func Build(source catalog.Catalog, bundleID string, env Environment) (Plan, erro
 				Action: "Run the pinned, verified setup.sh with sudo blocked and user-only scope",
 				Target: destination, Risk: "high",
 			})
+			add(Operation{
+				Phase: "configure", Component: component.ID,
+				Action: "Keep SLSsteam manifest-code sharing (Donate) off unless config.yaml already sets it",
+				Target: filepath.Join(env.XDGConfigHome, "SLSsteam", "config.yaml"), Risk: "low",
+			})
 		} else {
 			add(Operation{
 				Phase: "activate", Component: component.ID,

@@ -139,19 +139,6 @@ func activateDirectory(candidate, destination string) error {
 	return nil
 }
 
-func seedSLSConfig(source, destination string) error {
-	if _, err := os.Lstat(destination); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	info, err := os.Stat(source)
-	if err != nil {
-		return fmt.Errorf("inspect SLSsteam config template: %w", err)
-	}
-	return copyFileAtomic(source, destination, info.Mode())
-}
-
 func copyTreeContents(source, destination string, allowSymlinks bool) error {
 	return filepath.WalkDir(source, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -203,6 +190,15 @@ func copyTreeContents(source, destination string, allowSymlinks bool) error {
 }
 
 func copyFileAtomic(source, destination string, mode fs.FileMode) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	return writeFileAtomic(destination, input, mode)
+}
+
+func writeFileAtomic(destination string, input io.Reader, mode fs.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return err
 	}
@@ -211,11 +207,6 @@ func copyFileAtomic(source, destination string, mode fs.FileMode) error {
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	input, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer input.Close()
 	temporary, err := os.CreateTemp(filepath.Dir(destination), ".selene-file-*")
 	if err != nil {
 		return err
