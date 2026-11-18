@@ -10,7 +10,7 @@ func TestStableCatalogIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if catalog.Revision != "2026-08-24-v2.8" {
+	if catalog.Revision != "2026-11-18-v2.9" {
 		t.Fatalf("Revision = %q", catalog.Revision)
 	}
 	if len(catalog.Components) != 4 {
