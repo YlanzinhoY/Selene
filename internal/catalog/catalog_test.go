@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -50,6 +51,45 @@ func TestCatalogRejectsInsecureArtifactURL(t *testing.T) {
 	catalog.Components[0].Artifact.URL = "http://example.com/package.zip"
 	if err := catalog.Validate(); err == nil || !strings.Contains(err.Error(), "HTTPS") {
 		t.Fatalf("Validate() error = %v, want HTTPS error", err)
+	}
+}
+
+func TestCatalogRejectsInsecureMirror(t *testing.T) {
+	catalog, err := LoadStable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog.Components[0].Artifact.Mirrors = append(catalog.Components[0].Artifact.Mirrors, "http://example.com/package.zip")
+	if err := catalog.Validate(); err == nil || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("Validate() error = %v, want HTTPS error", err)
+	}
+}
+
+func TestCatalogRejectsDuplicateArtifactSource(t *testing.T) {
+	catalog, err := LoadStable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := &catalog.Components[0].Artifact
+	artifact.Mirrors = append(artifact.Mirrors, artifact.URL)
+	if err := catalog.Validate(); err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Fatalf("Validate() error = %v, want duplicate source error", err)
+	}
+}
+
+// GitHub release assets can be replaced in place under the same tag, which
+// breaks the pinned size and SHA-256. Primary sources must be commit-pinned;
+// release URLs may only appear as mirrors.
+func TestStableCatalogPinsPrimarySourcesToCommits(t *testing.T) {
+	catalog, err := LoadStable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := regexp.MustCompile(`[/@][0-9a-f]{40}/`)
+	for _, component := range catalog.Components {
+		if !commit.MatchString(component.Artifact.URL) {
+			t.Errorf("%s primary URL %s is not pinned to a commit", component.ID, component.Artifact.URL)
+		}
 	}
 }
 

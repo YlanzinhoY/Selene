@@ -39,7 +39,7 @@ TUI (Charm Bubble Tea)
 1. **TUI-Only Command Line**: Running `selene` directly starts the Charm TUI. The executable intentionally exposes **no operational CLI subcommands**. The only supported flag is `--version` (used for bootstrap self-tests).
 2. **User-Only Execution (No Root)**: Selene refuses to run as root (`effectiveUID() == 0`). Operations target `${HOME}/.local/share` and user systemd services. Sudo is blocked.
 3. **Controlled Execution Environment**: Subprocesses scrub inherited environment variables (`LD_AUDIT`, `LD_PRELOAD`, `LD_LIBRARY_PATH`) and run under a sanitized, trusted `PATH` (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`).
-4. **Embedded Immutable Catalog**: Manifests are embedded into the binary via `go:embed` at `internal/catalog/manifests/stable.json`. Upstream artifacts use immutable URLs (pinned tag/commit), hardcoded SHA-256 digests, and exact byte sizes. The `latest` tag is prohibited.
+4. **Embedded Immutable Catalog**: Manifests are embedded into the binary via `go:embed` at `internal/catalog/manifests/stable.json`. Primary artifact URLs are pinned to a commit (upstream's SHA-addressed jsDelivr mirror) because upstream replaces GitHub release assets in place; optional `mirrors` are tried in order, and every source must match the hardcoded SHA-256 digest and exact byte size. The `latest` tag is prohibited.
 5. **Transactional Integrity**:
    - Downloads and hash verification occur *before* taking snapshots or making filesystem changes.
    - Operations acquire a file lock at `${XDG_STATE_HOME:-$HOME/.local/state}/selene/lock`.
@@ -80,8 +80,8 @@ Do not hardcode user-facing copy in UI views or installers. All UI text, button 
 
 ### Updating Upstream Components
 When updating component versions in `internal/catalog/manifests/stable.json`:
-1. Obtain the exact immutable release URL, byte size, and SHA-256 digest from the official upstream source.
-2. Update version, URL, size, and SHA-256 together.
+1. Take the commit-pinned URL, byte size, and SHA-256 digest from the upstream mirror manifest (`https://cdn.jsdelivr.net/gh/swwayps/jsdelivr@main/manifest.json`) and cross-check them against the GitHub release API digest; see `docs/CATALOG.md` for the source order.
+2. Update version, URL, mirrors, size, and SHA-256 together.
 3. Run `go test ./...`.
 4. Commit separately with a semantic commit message, e.g., `chore(catalog): pin luatools-moon vX.Y`.
 

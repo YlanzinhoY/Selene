@@ -28,7 +28,11 @@
       },
       "artifact": {
         "name": "slsteam-moon-linux-2.9-lumen.zip",
-        "url": "https://github.com/swwayps/slsteam-moon/releases/download/v2.9/slsteam-moon-linux-2.9-lumen.zip",
+        "url": "https://cdn.jsdelivr.net/gh/swwayps/jsdelivr@6c975b97b071ce9953502f7a46417e12cc737af9/releases/slsteam-moon/v2.9/c05d2328c9902673295cd76c2e299dc853ab760fd470d67d15377e5c10995c72/slsteam-moon-linux-2.9-lumen.zip",
+        "mirrors": [
+          "https://raw.githubusercontent.com/swwayps/jsdelivr/6c975b97b071ce9953502f7a46417e12cc737af9/releases/slsteam-moon/v2.9/c05d2328c9902673295cd76c2e299dc853ab760fd470d67d15377e5c10995c72/slsteam-moon-linux-2.9-lumen.zip",
+          "https://github.com/swwayps/slsteam-moon/releases/download/v2.9/slsteam-moon-linux-2.9-lumen.zip"
+        ],
         "size": 5023592,
         "sha256": "c05d2328c9902673295cd76c2e299dc853ab760fd470d67d15377e5c10995c72",
         "format": "zip"
@@ -68,7 +72,11 @@
       },
       "artifact": {
         "name": "lumen-linux.zip",
-        "url": "https://github.com/swwayps/lumen/releases/download/v2.9/lumen-linux.zip",
+        "url": "https://cdn.jsdelivr.net/gh/swwayps/jsdelivr@6c975b97b071ce9953502f7a46417e12cc737af9/releases/lumen/v2.9/7aa0cb7fb6a6ddc73b8d548de3f4f0d58d36d158be0ca8fe32370dd10e41daa7/lumen-linux.zip",
+        "mirrors": [
+          "https://raw.githubusercontent.com/swwayps/jsdelivr/6c975b97b071ce9953502f7a46417e12cc737af9/releases/lumen/v2.9/7aa0cb7fb6a6ddc73b8d548de3f4f0d58d36d158be0ca8fe32370dd10e41daa7/lumen-linux.zip",
+          "https://github.com/swwayps/lumen/releases/download/v2.9/lumen-linux.zip"
+        ],
         "size": 2834287,
         "sha256": "7aa0cb7fb6a6ddc73b8d548de3f4f0d58d36d158be0ca8fe32370dd10e41daa7",
         "format": "zip"
@@ -103,7 +111,11 @@
       },
       "artifact": {
         "name": "luatools-linux.zip",
-        "url": "https://github.com/swwayps/luatools-moon/releases/download/v2.9/luatools-linux.zip",
+        "url": "https://cdn.jsdelivr.net/gh/swwayps/jsdelivr@6c975b97b071ce9953502f7a46417e12cc737af9/releases/plugin/v2.9/f4ddb67c66be66108834885634767cf69e7cf542aa7c121ea17f61d1fefc4dae/luatools-linux.zip",
+        "mirrors": [
+          "https://raw.githubusercontent.com/swwayps/jsdelivr/6c975b97b071ce9953502f7a46417e12cc737af9/releases/plugin/v2.9/f4ddb67c66be66108834885634767cf69e7cf542aa7c121ea17f61d1fefc4dae/luatools-linux.zip",
+          "https://github.com/swwayps/luatools-moon/releases/download/v2.9/luatools-linux.zip"
+        ],
         "size": 2052629,
         "sha256": "f4ddb67c66be66108834885634767cf69e7cf542aa7c121ea17f61d1fefc4dae",
         "format": "zip"

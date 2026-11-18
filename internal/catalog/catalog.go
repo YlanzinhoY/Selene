@@ -54,11 +54,18 @@ type Source struct {
 }
 
 type Artifact struct {
-	Name   string `json:"name"`
-	URL    string `json:"url"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256"`
-	Format string `json:"format"`
+	Name    string   `json:"name"`
+	URL     string   `json:"url"`
+	Mirrors []string `json:"mirrors,omitempty"`
+	Size    int64    `json:"size"`
+	SHA256  string   `json:"sha256"`
+	Format  string   `json:"format"`
+}
+
+// Sources returns the primary URL followed by the mirrors, in the order they
+// are tried. Every source must serve the same pinned bytes.
+func (a Artifact) Sources() []string {
+	return append([]string{a.URL}, a.Mirrors...)
 }
 
 type InstallSpec struct {
@@ -214,9 +221,16 @@ func validateComponent(component Component) error {
 	if component.Artifact.Name == "" || component.Artifact.Size <= 0 {
 		return errors.New("artifact name and positive size are required")
 	}
-	parsedURL, err := url.Parse(component.Artifact.URL)
-	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" {
-		return errors.New("artifact URL must be absolute HTTPS")
+	seen := make(map[string]bool, len(component.Artifact.Mirrors)+1)
+	for _, source := range component.Artifact.Sources() {
+		parsedURL, err := url.Parse(source)
+		if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" {
+			return errors.New("artifact URL must be absolute HTTPS")
+		}
+		if seen[source] {
+			return fmt.Errorf("artifact source %s is listed more than once", source)
+		}
+		seen[source] = true
 	}
 	checksum, err := hex.DecodeString(component.Artifact.SHA256)
 	if err != nil || len(checksum) != 32 || component.Artifact.SHA256 != strings.ToLower(component.Artifact.SHA256) {

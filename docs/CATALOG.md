@@ -8,24 +8,34 @@ The stable catalog is:
 internal/catalog/manifests/stable.json
 ```
 
-Each component points directly to a known upstream source:
+Each component records its upstream origin in `source`:
 
 - `swwayps/slsteam-moon`;
 - `swwayps/lumen`;
 - `swwayps/luatools-moon`;
 - `swwayps/cloudredirect-moon` for the optional component.
 
-The LuaTools Moon `install.sh` is useful as design reference, but Selene does not execute it and does not treat it as an integrity source.
+The LuaTools Moon `install.sh` and the upstream mirror manifest are useful references, but Selene does not execute the script and treats neither as an integrity source: the SHA-256 committed with the manifest is the trust anchor.
+
+## Download sources
+
+Upstream replaces GitHub release assets in place under the same tag, which breaks the pinned size and SHA-256 (the slsteam-moon v2.8 asset was replaced several times). The artifact `url` must therefore be pinned to a commit, and `mirrors` lists fallbacks tried in order:
+
+1. `url`: the upstream release mirror on jsDelivr, pinned to a mirror commit and addressed by the asset SHA-256, `https://cdn.jsdelivr.net/gh/swwayps/jsdelivr@<commit>/releases/<mirror-key>/<tag>/<sha256>/<asset>` (mirror keys: `slsteam-moon`, `lumen`, `plugin`);
+2. the same commit and path through `https://raw.githubusercontent.com/swwayps/jsdelivr/<commit>/...`;
+3. the GitHub release asset, which works only while upstream has not replaced it.
+
+Every source is verified against the same size and SHA-256 before use, and a source that serves other bytes is skipped. `TestStableCatalogPinsPrimarySourcesToCommits` rejects a primary URL that is not pinned to a commit.
 
 ## Updating a version
 
 1. Read the upstream release notes and source changes.
 2. Confirm repository, immutable tag, and exact artifact name.
-3. Obtain the size and SHA-256 from the official release API when available.
-4. Download the artifact independently and calculate SHA-256 again.
+3. Read the upstream mirror manifest at `https://cdn.jsdelivr.net/gh/swwayps/jsdelivr@main/manifest.json`; it lists the commit-pinned `url`, `size`, and `sha256` of each component's current stable asset.
+4. Cross-check size and SHA-256 against the asset `digest` in the GitHub release API, then download the artifact independently and calculate SHA-256 again.
 5. Inspect the full archive and reject absolute paths, `..`, unsafe links, and unexpected content.
 6. Review the installation strategy and validation markers.
-7. Update version, URL, size, and SHA-256 together.
+7. Update version, URL, mirrors, size, and SHA-256 together.
 8. Run `go test ./...` on Windows and Linux.
 9. Commit the catalog update separately, for example:
 
@@ -33,7 +43,7 @@ The LuaTools Moon `install.sh` is useful as design reference, but Selene does no
 chore(catalog): pin luatools-moon vX.Y
 ```
 
-Never use `latest` in the stable catalog. URLs must contain an immutable tag or commit, and the digest must be committed with the manifest.
+Never use `latest` or a branch name in the stable catalog. The primary URL must contain a commit, and the digest must be committed with the manifest.
 
 ## Strategies
 

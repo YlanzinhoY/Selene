@@ -81,61 +81,24 @@ func (f *Fetcher) Fetch(ctx context.Context, component catalog.Component, cacheD
 		return resultFor(component, target, true), nil
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, component.Artifact.URL, nil)
-	if err != nil {
-		return Result{}, fmt.Errorf("create artifact request: %w", err)
+	sources := component.Artifact.Sources()
+	var temporaryPath string
+	var failures []string
+	for _, source := range sources {
+		downloaded, err := f.download(ctx, component, source, cacheDir)
+		if err == nil {
+			temporaryPath = downloaded
+			break
+		}
+		if len(sources) == 1 || ctx.Err() != nil {
+			return Result{}, fmt.Errorf("download %s: %w", component.ID, err)
+		}
+		failures = append(failures, sourceLabel(source)+": "+err.Error())
 	}
-	request.Header.Set("Accept", "application/octet-stream")
-	request.Header.Set("User-Agent", "Selene/dev")
-
-	response, err := f.Client.Do(request)
-	if err != nil {
-		return Result{}, fmt.Errorf("download %s: %w", component.ID, err)
+	if temporaryPath == "" {
+		return Result{}, fmt.Errorf("download %s: every source failed: %s", component.ID, strings.Join(failures, "; "))
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return Result{}, fmt.Errorf("download %s: HTTP %s", component.ID, response.Status)
-	}
-	if response.ContentLength >= 0 && response.ContentLength != component.Artifact.Size {
-		return Result{}, fmt.Errorf("download %s: content length %d, expected %d", component.ID, response.ContentLength, component.Artifact.Size)
-	}
-
-	temporary, err := os.CreateTemp(cacheDir, ".selene-partial-*")
-	if err != nil {
-		return Result{}, fmt.Errorf("create temporary artifact: %w", err)
-	}
-	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return Result{}, fmt.Errorf("secure temporary artifact: %w", err)
-	}
-
-	hasher := sha256.New()
-	limited := io.LimitReader(response.Body, component.Artifact.Size+1)
-	written, copyErr := io.Copy(io.MultiWriter(temporary, hasher), limited)
-	if copyErr != nil {
-		temporary.Close()
-		return Result{}, fmt.Errorf("download %s: %w", component.ID, copyErr)
-	}
-	if written != component.Artifact.Size {
-		temporary.Close()
-		return Result{}, fmt.Errorf("download %s: received %d bytes, expected %d", component.ID, written, component.Artifact.Size)
-	}
-	if !hashMatches(hasher.Sum(nil), component.Artifact.SHA256) {
-		temporary.Close()
-		return Result{}, fmt.Errorf("download %s: SHA-256 mismatch", component.ID)
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return Result{}, fmt.Errorf("sync artifact: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return Result{}, fmt.Errorf("close artifact: %w", err)
-	}
-	if err := Inspect(temporaryPath, component); err != nil {
-		return Result{}, fmt.Errorf("inspect %s: %w", component.ID, err)
-	}
 
 	if info, err := os.Lstat(target); err == nil {
 		if !info.Mode().IsRegular() {
@@ -151,6 +114,77 @@ func (f *Fetcher) Fetch(ctx context.Context, component catalog.Component, cacheD
 		return Result{}, fmt.Errorf("activate cached artifact: %w", err)
 	}
 	return resultFor(component, target, false), nil
+}
+
+// download fetches one source into a private temporary file inside cacheDir
+// and returns its path only after the byte count, SHA-256 and archive
+// inspection all match the pinned artifact.
+func (f *Fetcher) download(ctx context.Context, component catalog.Component, source, cacheDir string) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+	if err != nil {
+		return "", fmt.Errorf("create artifact request: %w", err)
+	}
+	request.Header.Set("Accept", "application/octet-stream")
+	request.Header.Set("User-Agent", "Selene/dev")
+
+	response, err := f.Client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %s", response.Status)
+	}
+	if response.ContentLength >= 0 && response.ContentLength != component.Artifact.Size {
+		return "", fmt.Errorf("content length %d, expected %d", response.ContentLength, component.Artifact.Size)
+	}
+
+	temporary, err := os.CreateTemp(cacheDir, ".selene-partial-*")
+	if err != nil {
+		return "", fmt.Errorf("create temporary artifact: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	fail := func(cause error) (string, error) {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+		return "", cause
+	}
+	if err := temporary.Chmod(0o600); err != nil {
+		return fail(fmt.Errorf("secure temporary artifact: %w", err))
+	}
+
+	hasher := sha256.New()
+	limited := io.LimitReader(response.Body, component.Artifact.Size+1)
+	written, err := io.Copy(io.MultiWriter(temporary, hasher), limited)
+	if err != nil {
+		return fail(err)
+	}
+	if written != component.Artifact.Size {
+		return fail(fmt.Errorf("received %d bytes, expected %d", written, component.Artifact.Size))
+	}
+	if !hashMatches(hasher.Sum(nil), component.Artifact.SHA256) {
+		return fail(errors.New("SHA-256 mismatch"))
+	}
+	if err := temporary.Sync(); err != nil {
+		return fail(fmt.Errorf("sync artifact: %w", err))
+	}
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return "", fmt.Errorf("close artifact: %w", err)
+	}
+	if err := Inspect(temporaryPath, component); err != nil {
+		_ = os.Remove(temporaryPath)
+		return "", fmt.Errorf("inspect: %w", err)
+	}
+	return temporaryPath, nil
+}
+
+// sourceLabel names a download source by its host in aggregated errors.
+func sourceLabel(source string) string {
+	if parsed, err := url.Parse(source); err == nil && parsed.Host != "" {
+		return parsed.Host
+	}
+	return source
 }
 
 // Inspect rejects unsafe archives and confirms required files before install.
@@ -288,9 +322,11 @@ func verifyExisting(target string, component catalog.Component) (bool, error) {
 }
 
 func validateArtifactInput(component catalog.Component) error {
-	parsed, err := url.Parse(component.Artifact.URL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return errors.New("artifact URL must use HTTPS")
+	for _, source := range component.Artifact.Sources() {
+		parsed, err := url.Parse(source)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+			return errors.New("artifact URL must use HTTPS")
+		}
 	}
 	if component.Artifact.Size <= 0 || component.Artifact.Size > maxUncompressedBytes {
 		return errors.New("artifact size is outside the supported range")
