@@ -50,7 +50,7 @@ curl --proto '=https' --tlsv1.2 -fL \
   -o /tmp/selene-install.sh
 
 less /tmp/selene-install.sh
-sh /tmp/selene-install.sh --version v0.0.5
+sh /tmp/selene-install.sh --version v0.0.6
 ```
 
 Press `q` to close `less`. The bootstrap verifies the release checksum and atomically installs only `~/.local/bin/selene`.
